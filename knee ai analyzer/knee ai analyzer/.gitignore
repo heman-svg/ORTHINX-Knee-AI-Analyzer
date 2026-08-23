@@ -1,0 +1,66 @@
+# Environment & secrets
+.env
+.env.local
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Databases & local storage
+*.db
+*.sqlite3
+kneeai.db
+
+# Storage folders content (keep folders via .gitkeep)
+data/uploads/*
+!data/uploads/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/results/*
+!data/results/.gitkeep
+data/validation_results*
+data/audit_visualizations/*
+data/audit/*
+static/reports/*
+!static/reports/.gitkeep
+
+# Keep validated production model
+model_weights/*
+!model_weights/.gitkeep
+!model_weights/best_model_v2.pth
+
+# IDEs and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
