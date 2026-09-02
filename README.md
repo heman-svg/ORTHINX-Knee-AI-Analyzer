@@ -3,6 +3,7 @@ ORTHINX is an AI-powered knee X-ray analysis platform for automated measurements
 
 ✨ Features
 🩻 Knee X-ray upload and validation
+
 🤖 AI-based knee segmentation and analysis
 📏 Automated anatomical and joint-space measurements
 🦴 Femoral and tibial measurements
