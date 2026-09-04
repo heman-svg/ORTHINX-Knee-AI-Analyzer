@@ -135,7 +135,7 @@ ORTHINX/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/smsrinivasmanikandan-sudo/ORTHINX.git
+git clone [https://github.com/heman-svg/ORTHINX-Knee-AI-Analyzer.git]
 cd ORTHINX
 ```
 
@@ -337,9 +337,9 @@ This project is licensed under the **ISC License**. See the [LICENSE](LICENSE) f
 
 ## 👤 Author
 
-**SMS Rinivas Manikandan**
+**Hemanthan B N**
 
-- GitHub: [@smsrinivasmanikandan-sudo](https://github.com/smsrinivasmanikandan-sudo)
+- GitHub: [@heman-svg](https://github.com/heman-svg)
 
 ---
 
