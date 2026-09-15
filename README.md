@@ -1,109 +1,148 @@
-# ORTHINX — AI-Powered Knee X-Ray Analysis
+# KneeAI — AI-Assisted Knee Assessment & Patient-Specific Implant Planning
 
-ORTHINX is an AI-powered knee X-ray analysis platform for automated measurements, segmentation, meniscus analysis, implant planning, patient management, and clinical PDF report generation.
+Backend API and AI pipeline foundation for knee radiograph analysis, anatomical measurement estimation, Osteoarthritis (OA) severity grading, and patient-specific implant matching.
 
-## ✨ Features
+---
 
-- 🩻 Knee X-ray upload and validation
-- 🤖 AI-based knee segmentation and analysis
-- 📏 Automated anatomical and joint-space measurements
-- 🦴 Femoral and tibial measurements
-- 🔍 Image enhancement and visualization
-- 🧠 Meniscus and knee assessment
-- 📊 Measurement quality and reliability scoring
-- 👤 Patient information and case management
-- 📄 Professional PDF and JSON report generation
-- 🖼️ Uploaded X-ray included in final reports
-- 🕒 Real-time date and time tracking
-- 🔐 Input validation and secure file handling
-- 🔄 Complete frontend-backend integration
+## 🏛️ Architecture Overview
 
-## 🤖 AI Model
+The system is organized into a modular backend ready to integrate medical imaging processing and AI inference engines:
 
-The system uses a **MONAI 2D U-Net** for knee X-ray segmentation.
+```text
+knee-ai-analyzer/
+│
+├── app/
+│   ├── api/             # API routes (Patients, Scans, Preprocessing)
+│   ├── core/            # Core settings, constants, and paths
+│   ├── db/              # SQLAlchemy database engine and session management
+│   ├── models/          # Database ORM models (Patient, Scan)
+│   ├── schemas/         # Pydantic validation schemas
+│   ├── services/        # Business logic & preprocessing pipeline
+│   │   └── preprocessing/
+│   │       ├── loader.py        # NIfTI, DICOM, and 2D image loaders
+│   │       ├── validator.py     # Numeric integrity & array validation
+│   │       ├── metadata.py      # Spatial & intensity metadata extractor
+│   │       ├── normalization.py # Min-max, z-score, percentile clipping
+│   │       ├── resampling.py    # Physical voxel spacing spline interpolation
+│   │       ├── orientation.py   # Canonical RAS+ coordinate reorientation
+│   │       └── pipeline.py      # End-to-end preprocessing orchestrator
+│   ├── utils/           # Helper functions
+│   └── main.py          # FastAPI application entrypoint
+│
+├── data/
+│   ├── uploads/         # Ingested raw medical scans (DICOM/NIfTI/PNG)
+│   ├── processed/       # Preprocessed images & standardizations
+│   └── results/         # Generated segmentation masks & overlays
+│
+├── model_weights/       # Deep learning model weight artifacts (.pth/.pt/.onnx)
+├── tests/               # Unit and integration test suite
+├── .env.example         # Template for environment configuration
+├── .gitignore           # Git ignore rules
+├── requirements.txt     # Python backend dependencies
+└── README.md            # Project documentation
+```
 
-## 📊 Validated Performance
+---
 
-Validation was performed on an **untouched 60-patient test cohort**.
+## 🔬 Medical Image Preprocessing
 
-| Metric | Result |
-|---|---:|
-| Dice / F1 Score | **94.22%** |
-| IoU | **89.94%** |
-| Precision | **92.31%** |
-| Recall | **96.27%** |
-| Pixel Accuracy | **99.31%** |
-| Specificity | **99.52%** |
+> **Clinical Disclaimer:** *Preprocessing prepares medical images for downstream AI segmentation. It does not perform segmentation or diagnosis.*
 
-> Dice/F1 and IoU are the primary segmentation performance metrics.
+### 1. Supported Formats
+* **NIfTI Volumes (`.nii`, `.nii.gz`):** 3D/4D volumetric MRI or CT knee acquisitions.
+* **DICOM (`.dcm`):** Single-slice and multi-frame medical imaging preserving spatial metadata, pixel spacing, slice thickness, and rescale slope/intercept.
+* **2D Radiographs (`.png`, `.jpg`, `.jpeg`):** Standard 2D planar projection exports.
 
-## 🔄 System Workflow
+### 2. Loading
+Loaded via `nibabel` (NIfTI), `pydicom` (DICOM), and `PIL` (2D images), retaining exact affine coordinate matrices and voxel zoom dimensions without downsampling or destroying 3D spatial context.
 
-**Patient Details**  
-↓  
-**X-Ray Upload**  
-↓  
-**Image Validation**  
-↓  
-**Image Enhancement**  
-↓  
-**AI Segmentation**  
-↓  
-**Anatomical Measurements**  
-↓  
-**Knee Assessment**  
-↓  
-**Complete Report**  
-↓  
-**PDF / JSON Export**
+### 3. Metadata Extraction
+Inspects and exposes:
+* Spatial dimensions (`dimensions`, `num_dimensions`)
+* Physical voxel spacing in millimeters (`spacing`: `[sx, sy, sz]`)
+* Anatomical orientation code (`orientation`: e.g., `RAS`, `LPS`)
+* Numerical data type (`dtype`)
+* Full intensity distribution (`intensity_min`, `intensity_max`, `intensity_mean`, `intensity_std`)
 
-## ⚙️ Backend
+### 4. Normalization Strategies
+Configurable intensity standardizations:
+* **`min_max` (default):** Scales intensities linearly to a target range (e.g. $[0.0, 1.0]$).
+* **`z_score`:** Centers intensities to zero mean and unit variance.
+* **`percentile_clip`:** Robust MRI/CT clipping of outlier tail percentiles (0.5% and 99.5%) prior to scaling.
+* **`none`:** Preserves raw voxel values.
 
-The backend handles:
+### 5. Resampling
+Performs spline interpolation to a user-configured physical voxel spacing (e.g. $[1.0, 1.0, 1.0]$ mm). Preserves original native dimensions and voxel spacing if no target is specified.
 
-- Image processing
-- AI inference
-- Native-space reconstruction
-- Anatomical measurements
-- JSW analysis
-- Quality control
-- Research assessment
-- Report generation
-- PDF and JSON export
+### 6. Orientation Handling
+Automatically standardizes 3D volumetric affine coordinates to canonical **RAS+** (Right, Anterior, Superior) anatomical orientation while preserving exact patient geometry.
 
-## 🛠️ Technology Stack
+### 7. Output Storage
+Preprocessed files are saved with collision-safe unique identifiers inside `data/processed/` (`proc_<uuid>.nii.gz` or `proc_<uuid>.png`), completely leaving the original files in `data/uploads/` untouched.
 
-- **AI / Deep Learning:** MONAI, PyTorch
-- **Segmentation:** 2D U-Net
-- **Image Processing:** OpenCV
-- **Backend:** Flask / FastAPI
-- **Frontend:** React
-- **Database:** PostgreSQL
-- **Task Processing:** Celery
-- **Cache / Queue:** Redis
-- **Deployment:** Docker
+### 8. Preprocessing API Endpoints
+* **`GET /scans/{scan_id}/metadata`** — Extract and inspect original scan spatial and intensity metadata.
+* **`POST /scans/{scan_id}/preprocess`** — Trigger preprocessing with configurable parameters (`normalization_method`, `target_spacing`, `reorient`).
 
-## 🧪 Testing
+---
 
-The complete application workflow has been tested across:
+## 🚀 Getting Started
 
-- Image upload and validation
-- Preprocessing
-- AI segmentation
-- Anatomical measurements
-- Knee assessment
-- Report generation
-- PDF / JSON export
-- Frontend-backend integration
-- API communication
-- Security and edge cases
+### 1. Prerequisites
+* Python 3.10+
+* Git
 
-## ⚠️ Disclaimer
+### 2. Environment Setup
 
-ORTHINX is a **research and clinical decision-support system** and is not a replacement for professional medical diagnosis.
+Create and activate a virtual environment:
 
-Physical measurements in millimeters require valid image calibration or DICOM pixel-spacing information. Where calibration is unavailable, measurements are reported in pixels.
+**Windows (PowerShell):**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
 
-## 📌 Project Status
+**Linux / macOS:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
 
-**Research prototype — AI pipeline and application workflow implemented and validated for academic demonstration.**
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configuration
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+---
+
+## 💻 Running the Server
+
+Start the development server with Uvicorn:
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+* **Root Status:** `http://localhost:8000/`
+* **Health Check:** `http://localhost:8000/health`
+* **Interactive Swagger UI:** `http://localhost:8000/docs`
+* **Alternative ReDoc UI:** `http://localhost:8000/redoc`
+
+---
+
+## 🧪 Running Tests
+
+Execute the test suite using `pytest`:
+
+```bash
+python -m pytest -v
+```
