@@ -35,11 +35,11 @@ export class ErrorBoundary extends Component<Props, State> {
     try {
       useAnalysisStore.getState().resetActiveCase();
     } catch (_) {}
-    window.location.href = "/knee-analysis";
+    window.location.href = "/analysis/upload";
   };
 
   private handleBackToDashboard = () => {
-    window.location.href = "/";
+    window.location.href = "/dashboard";
   };
 
   public render() {

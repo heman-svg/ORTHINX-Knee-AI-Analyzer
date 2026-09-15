@@ -57,27 +57,12 @@ settings.init_directories()
 audit_vis_dir = settings.BASE_DIR / "data" / "audit_visualizations"
 audit_vis_dir.mkdir(parents=True, exist_ok=True)
 
-# Mount Static File Endpoints safely
+# Mount Static File Endpoints
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 app.mount("/results", StaticFiles(directory=str(settings.RESULTS_DIR)), name="results")
 app.mount("/uploads", StaticFiles(directory=str(settings.UPLOAD_DIR)), name="uploads")
 app.mount("/preprocessed", StaticFiles(directory=str(settings.PROCESSED_DIR)), name="preprocessed")
 app.mount("/audit_vis", StaticFiles(directory=str(audit_vis_dir)), name="audit_vis")
-
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc: Exception):
-    import traceback
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
-        status_code=500,
-        content={
-            "success": False,
-            "error": str(exc) or "Internal server error",
-            "details": traceback.format_exc(),
-            "stage": getattr(exc, "stage", "server"),
-        }
-    )
 
 
 @app.get("/", tags=["Root"])

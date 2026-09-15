@@ -58,29 +58,21 @@ def evaluate_measurement_quality(
     if not jsw_sufficient:
         warnings.append(f"Insufficient valid horizontal cross-sections for reliable JSW profiling ({jsw_samples} samples < {config.min_jsw_samples} minimum).")
 
-    # Determine overall status and meaningful quality score
-    # Plausibility factors
-    contrast_score = 0.90
-    if not non_empty or jsw_samples == 0:
-        overall_status = "FAILED"
+    # Determine overall status
+    if not non_empty or num_components > config.max_components_fail or jsw_samples == 0:
+        overall_status = "INVALID"
         quality_score = 0.0
-    elif num_components > config.max_components_fail or not area_plausible:
-        overall_status = "PARTIAL"
-        quality_score = max(0.45, 0.70 - (0.05 * len(warnings)))
     elif len(warnings) > 0:
-        overall_status = "PARTIAL" if len(warnings) >= 2 else "SUCCESS"
-        quality_score = max(0.60, 0.94 - (0.06 * len(warnings)))
+        overall_status = "VALID_WITH_WARNING"
+        quality_score = max(0.40, 1.0 - (0.20 * len(warnings)))
     else:
-        overall_status = "SUCCESS"
-        quality_score = 0.94
-
-    quality_score_pct = round(float(quality_score * 100.0), 1)
+        overall_status = "VALID"
+        quality_score = 1.0
 
     return {
         "status": overall_status,
-        "quality_score": quality_score_pct,
-        "quality_score_ratio": round(float(quality_score), 2),
-        "is_valid": overall_status in ("SUCCESS", "PARTIAL", "VALID", "VALID_WITH_WARNING"),
+        "quality_score": round(quality_score, 2),
+        "is_valid": overall_status in ("VALID", "VALID_WITH_WARNING"),
         "warnings": warnings,
         "checks": checks,
     }

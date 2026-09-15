@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePatientStore } from "../store/patientStore";
+import { useAnalysisStore } from "../store/analysisStore";
 import { ArrowRight, UserPlus } from "lucide-react";
 import { AnimatedButton } from "../components/ui/AnimatedButton";
 
 export const NewPatientPage: React.FC = () => {
   const navigate = useNavigate();
   const { createPatient } = usePatientStore();
+  const { startNewAnalysis, setPatientInfo } = useAnalysisStore();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -20,12 +22,21 @@ export const NewPatientPage: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!formData.name.trim()) return;
-    await createPatient({
+    const newPat = await createPatient({
       name: formData.name.trim(),
       age: parseInt(formData.age) || 50,
       sex: formData.gender === "Male" ? "Male" : "Female",
     });
-    navigate("/knee-analysis");
+
+    startNewAnalysis();
+    setPatientInfo({
+      patientId: newPat.patientCode || newPat.id,
+      patientName: newPat.name,
+      patientAge: newPat.age,
+      patientSex: newPat.sex,
+    });
+
+    navigate("/analysis/upload");
   };
 
   return (
@@ -144,7 +155,7 @@ export const NewPatientPage: React.FC = () => {
               loadingText="Creating Record..."
               successText="Patient Registered!"
               onClick={handleSubmit}
-              onSuccess={() => navigate("/knee-analysis")}
+              onSuccess={() => navigate("/analysis/upload")}
               style={{ padding: "12px 32px", fontSize: "15px" }}
             >
               Proceed to Knee Analysis

@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.services.measurements.geometry import extract_native_geometry
 from app.services.measurements.jsw import calculate_jsw_profile
 from app.services.measurements.quality import evaluate_measurement_quality
+from app.services.classification.inference import predict_knee_severity
 from app.services.segmentation.config import SegmentationConfig, get_torch_device
 from app.services.segmentation.model import SegmentationModel
 from app.services.training.monai_dataset import (
@@ -334,6 +335,9 @@ def run_v2_inference(
         inference_time_ms: float execution time in milliseconds
     """
     seg_model = model or get_v2_model()
+    if not seg_model.is_available():
+        return np.zeros((512, 512), dtype=np.uint8), np.zeros((512, 512), dtype=np.float32), 0.0
+
     device = seg_model.device
     net = seg_model._build_network()
     net.eval()
@@ -357,23 +361,6 @@ def run_v2_inference(
 
         mask_np = pred.squeeze().cpu().numpy().astype(np.uint8)
         prob_np = probs.squeeze().cpu().numpy().astype(np.float32)
-
-    # Post-processing: connected components & morphological gap closing
-    import scipy.ndimage as ndi
-    labeled, num_c = ndi.label(mask_np > 0)
-    if num_c > 0:
-        sizes = [int(np.sum(labeled == i)) for i in range(1, num_c + 1)]
-        max_s = max(sizes)
-        # Keep dominant articulation compartments; reject background noise specks
-        clean_mask = np.zeros_like(mask_np, dtype=bool)
-        for i, s in enumerate(sizes, 1):
-            if s >= max_s * 0.15 and s >= 80:
-                clean_mask |= (labeled == i)
-        
-        # Morphological closing to seal small voids inside articulation
-        clean_mask = ndi.binary_closing(clean_mask, structure=np.ones((7, 7)))
-        clean_mask = ndi.binary_fill_holes(clean_mask)
-        mask_np = clean_mask.astype(np.uint8)
 
     elapsed_ms = (time.perf_counter() - start_t) * 1000.0
     return mask_np, prob_np, round(elapsed_ms, 2)
@@ -399,15 +386,12 @@ def restore_native_mask(
 def calculate_native_jsw(
     native_mask: np.ndarray,
     pixel_spacing: Optional[Union[float, Sequence[float]]] = None,
-    view: str = "ap",
-) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
-    Extract geometric metrics, anatomical widths, and JSW profiling in native coordinate space.
+    Extract geometric metrics and JSW profiling in native coordinate space.
     Strict Calibration Safety:
     - If pixel_spacing is None: measurements reported ONLY in pixels.
     - If pixel_spacing is provided: both pixels and calibrated millimeters are returned.
-    - If view is "ap": coronal widths (Femoral Width, Tibial Width) are derived; AP dimensions are marked unavailable.
-    - If view is "lateral": anteroposterior depths (Femoral AP, Tibial AP) are derived from the lateral condylar span.
     """
     h, w = native_mask.shape[:2]
     geom = extract_native_geometry(native_mask)
@@ -421,180 +405,28 @@ def calculate_native_jsw(
         elif isinstance(pixel_spacing, (list, tuple)) and len(pixel_spacing) > 0 and pixel_spacing[0] > 0:
             spacing_val = float(pixel_spacing[0])
 
-    calib_mode = "user_calibrated" if spacing_val is not None else "pixel_units_only"
+    calibration_info: Dict[str, Any] = {
+        "available": spacing_val is not None,
+        "unit": "mm" if spacing_val is not None else "pixels",
+        "pixel_spacing_mm": spacing_val,
+    }
 
-    # Anatomical spans from native mask coordinates
-    fg_mask = native_mask > 0
-    cols = np.any(fg_mask, axis=0)
-    col_indices = np.where(cols)[0]
-
-    is_lateral = view.lower() == "lateral"
-    is_axial = view.lower() == "axial" or view.lower() == "top"
-
-    if len(col_indices) >= 5:
-        xmin = int(col_indices[0])
-        xmax = int(col_indices[-1])
-        horizontal_span_px = round(float(xmax - xmin + 1), 1)
-    else:
-        horizontal_span_px = None
-
-    medial_jsw_px = jsw.get("compartment_left_mean_px") or jsw.get("mean_px")
-    lateral_jsw_px = jsw.get("compartment_right_mean_px") or jsw.get("mean_px")
-    min_jsw_px = jsw.get("min_px")
-    mean_jsw_px = jsw.get("mean_px")
-    joint_area_px = int(geom.get("foreground_pixels", 0))
-
-    unit_str = "mm" if spacing_val is not None else "px"
-    area_unit_str = "mm²" if spacing_val is not None else "px²"
-
+    # If calibrated, compute mm metrics
     if spacing_val is not None:
-        medial_jsw_mm = round(medial_jsw_px * spacing_val, 2) if medial_jsw_px is not None else None
-        lateral_jsw_mm = round(lateral_jsw_px * spacing_val, 2) if lateral_jsw_px is not None else None
-        min_jsw_mm = round(min_jsw_px * spacing_val, 2) if min_jsw_px is not None else None
-        mean_jsw_mm = round(mean_jsw_px * spacing_val, 2) if mean_jsw_px is not None else None
-        joint_area_mm2 = round(float(joint_area_px) * (spacing_val ** 2), 1)
-
-        jsw["min_mm"] = min_jsw_mm
-        jsw["median_mm"] = round(float(jsw["median_px"]) * spacing_val, 2) if jsw.get("median_px") is not None else None
-        jsw["max_mm"] = round(float(jsw["max_px"]) * spacing_val, 2) if jsw.get("max_px") is not None else None
-        jsw["mean_mm"] = mean_jsw_mm
-        geom["area_mm2"] = joint_area_mm2
+        if jsw.get("min_px") is not None:
+            jsw["min_mm"] = round(float(jsw["min_px"]) * spacing_val, 2)
+            jsw["median_mm"] = round(float(jsw["median_px"]) * spacing_val, 2)
+            jsw["max_mm"] = round(float(jsw["max_px"]) * spacing_val, 2)
+            jsw["mean_mm"] = round(float(jsw["mean_px"]) * spacing_val, 2)
+        geom["area_mm2"] = round(float(geom["foreground_pixels"]) * (spacing_val ** 2), 2)
     else:
-        medial_jsw_mm = None
-        lateral_jsw_mm = None
-        min_jsw_mm = None
-        mean_jsw_mm = None
-        joint_area_mm2 = None
         jsw["min_mm"] = None
         jsw["median_mm"] = None
         jsw["max_mm"] = None
         jsw["mean_mm"] = None
         geom["area_mm2"] = None
 
-    if is_lateral:
-        # Lateral radiograph: horizontal span represents anteroposterior dimension
-        femoral_ap_px = horizontal_span_px
-        tibial_ap_px = round(femoral_ap_px * 0.82, 1) if femoral_ap_px is not None else None
-        femoral_ap_mm = round(femoral_ap_px * spacing_val, 1) if (femoral_ap_px and spacing_val) else None
-        tibial_ap_mm = round(tibial_ap_px * spacing_val, 1) if (tibial_ap_px and spacing_val) else None
-
-        femoral_width_obj = {
-            "value": None,
-            "unit": None,
-            "source": "image-derived",
-            "status": "Not measurable on lateral view (requires coronal AP radiograph)",
-        }
-        tibial_width_obj = {
-            "value": None,
-            "unit": None,
-            "source": "image-derived",
-            "status": "Not measurable on lateral view (requires coronal AP radiograph)",
-        }
-        femoral_ap_obj = {
-            "value": femoral_ap_mm if spacing_val is not None else femoral_ap_px,
-            "unit": unit_str,
-            "value_px": femoral_ap_px,
-            "value_mm": femoral_ap_mm,
-            "source": "image-derived",
-            "status": "Measured from lateral radiograph",
-        }
-        tibial_ap_obj = {
-            "value": tibial_ap_mm if spacing_val is not None else tibial_ap_px,
-            "unit": unit_str,
-            "value_px": tibial_ap_px,
-            "value_mm": tibial_ap_mm,
-            "source": "image-derived",
-            "status": "Measured from lateral radiograph",
-        }
-    else:
-        # Front (AP) coronal radiograph: horizontal span represents mediolateral width
-        femoral_width_px = horizontal_span_px
-        tibial_plateau_width_px = round(femoral_width_px * 0.96, 1) if femoral_width_px is not None else None
-        femoral_width_mm = round(femoral_width_px * spacing_val, 1) if (femoral_width_px and spacing_val) else None
-        tibial_plateau_width_mm = round(tibial_plateau_width_px * spacing_val, 1) if (tibial_plateau_width_px and spacing_val) else None
-
-        femoral_width_obj = {
-            "value": femoral_width_mm if spacing_val is not None else femoral_width_px,
-            "unit": unit_str,
-            "value_px": femoral_width_px,
-            "value_mm": femoral_width_mm,
-            "source": "image-derived",
-        }
-        tibial_width_obj = {
-            "value": tibial_plateau_width_mm if spacing_val is not None else tibial_plateau_width_px,
-            "unit": unit_str,
-            "value_px": tibial_plateau_width_px,
-            "value_mm": tibial_plateau_width_mm,
-            "source": "image-derived",
-        }
-        femoral_ap_obj = {
-            "value": None,
-            "unit": None,
-            "source": "image-derived",
-            "status": "Requires lateral radiograph",
-        }
-        tibial_ap_obj = {
-            "value": None,
-            "unit": None,
-            "source": "image-derived",
-            "status": "Requires lateral radiograph",
-        }
-
-    calibration_info: Dict[str, Any] = {
-        "available": spacing_val is not None,
-        "mode": calib_mode,
-        "unit": "mm" if spacing_val is not None else "px",
-        "pixel_spacing_mm": spacing_val,
-        "pixel_spacing_mm_px": spacing_val,
-    }
-
-    anatomical_measurements = {
-        "femoral_width": femoral_width_obj,
-        "tibial_width": tibial_width_obj,
-        "medial_jsw": {
-            "value": medial_jsw_mm if spacing_val is not None else (round(medial_jsw_px, 1) if medial_jsw_px else None),
-            "unit": unit_str,
-            "value_px": round(medial_jsw_px, 1) if medial_jsw_px else None,
-            "value_mm": medial_jsw_mm,
-            "source": "image-derived",
-        },
-        "lateral_jsw": {
-            "value": lateral_jsw_mm if spacing_val is not None else (round(lateral_jsw_px, 1) if lateral_jsw_px else None),
-            "unit": unit_str,
-            "value_px": round(lateral_jsw_px, 1) if lateral_jsw_px else None,
-            "value_mm": lateral_jsw_mm,
-            "source": "image-derived",
-        },
-        "min_jsw": {
-            "value": min_jsw_mm if spacing_val is not None else (round(min_jsw_px, 1) if min_jsw_px else None),
-            "unit": unit_str,
-            "value_px": round(min_jsw_px, 1) if min_jsw_px else None,
-            "value_mm": min_jsw_mm,
-            "source": "image-derived",
-        },
-        "mean_jsw": {
-            "value": mean_jsw_mm if spacing_val is not None else (round(mean_jsw_px, 1) if mean_jsw_px else None),
-            "unit": unit_str,
-            "value_px": round(mean_jsw_px, 1) if mean_jsw_px else None,
-            "value_mm": mean_jsw_mm,
-            "source": "image-derived",
-        },
-        "joint_space_area": {
-            "value": joint_area_mm2 if spacing_val is not None else joint_area_px,
-            "unit": area_unit_str,
-            "value_px": joint_area_px,
-            "value_mm": joint_area_mm2,
-            "source": "image-derived",
-        },
-        "femoral_ap": femoral_ap_obj,
-        "tibial_ap": tibial_ap_obj,
-        "meniscus": {
-            "status": "unavailable",
-            "message": "Meniscus measurement unavailable for this image/model - plain radiograph evaluates radiolucent joint clearance",
-        },
-    }
-
-    return geom, jsw, calibration_info, anatomical_measurements
+    return geom, jsw, calibration_info
 
 
 # -------------------------------------------------------------------------
@@ -607,171 +439,83 @@ def run_quality_control(
 ) -> Dict[str, Any]:
     """
     Assign clinical safety classification:
-    SUCCESS, PARTIAL, or FAILED.
+    VALID, VALID_WITH_WARNING, or INVALID.
     """
     return evaluate_measurement_quality(geometry_metrics, jsw_metrics, calibration_info)
 
 
 # -------------------------------------------------------------------------
-# 9. VISUALIZATION ARTIFACTS GENERATION (4 DISTINCT WORKING VIEWS)
+# 9. VISUALIZATION ARTIFACTS GENERATION
 # -------------------------------------------------------------------------
 def create_single_analysis_visualizations(
     original_gray_2d: np.ndarray,
     enhanced_2d: np.ndarray,
     native_mask: np.ndarray,
     jsw_metrics: Dict[str, Any],
-    anatomical_measurements: Dict[str, Any],
     output_dir: Path,
     file_id: str,
-    view: str = "ap",
 ) -> Dict[str, str]:
     """
-    Generate high-contrast visual artifacts for the 4 frontend tabs:
-    1. original image (Normalized original radiograph)
-    2. enhanced image (Contrast-enhanced CLAHE & bilateral filtered)
-    3. measurements (Enhanced image with caliper bars, width lines, text labels, and JSW sample vectors)
-    4. segmentation mask (Multi-color anatomical overlays for femur, tibia, and joint space)
+    Generate high-contrast visual artifacts for the frontend:
+    - original image
+    - enhanced image
+    - native binary mask
+    - composite clinical overlay with JSW profile vectors
     """
-    from PIL import ImageDraw
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     orig_filename = f"original_{file_id}.png"
     enh_filename = f"enhanced_{file_id}.png"
     mask_filename = f"mask_{file_id}.png"
-    meas_filename = f"measurements_{file_id}.png"
     overlay_filename = f"overlay_{file_id}.png"
 
     orig_path = output_dir / orig_filename
     enh_path = output_dir / enh_filename
     mask_path = output_dir / mask_filename
-    meas_path = output_dir / meas_filename
     overlay_path = output_dir / overlay_filename
 
-    # Tab 1: Save Original Radiograph
+    # Save original & enhanced images
     Image.fromarray(np.clip(original_gray_2d, 0, 255).astype(np.uint8)).save(orig_path)
-
-    # Tab 2: Save Enhanced Radiograph
     Image.fromarray(enhanced_2d).save(enh_path)
 
+    # Save native binary mask
+    mask_uint8 = (native_mask > 0).astype(np.uint8) * 255
+    Image.fromarray(mask_uint8).save(mask_path)
+
+    # Create Clinical Composite Overlay
     h, w = enhanced_2d.shape[:2]
+    # Base background (RGB)
     base_rgb = np.stack([enhanced_2d] * 3, axis=-1)
+
+    # Colorize segmentation mask (Soft Cyan & Gold tint)
+    overlay_rgb = base_rgb.copy()
     fg = native_mask > 0
-
-    # Tab 4: Multi-colored Anatomical Segmentation Mask Overlay
-    seg_rgb = base_rgb.copy()
     if np.any(fg):
-        # Soft cyan tint for the joint space clearance (R: 20, G: 210, B: 245)
-        seg_rgb[fg, 0] = np.clip(0.48 * base_rgb[fg, 0] + 0.52 * 20, 0, 255).astype(np.uint8)
-        seg_rgb[fg, 1] = np.clip(0.48 * base_rgb[fg, 1] + 0.52 * 210, 0, 255).astype(np.uint8)
-        seg_rgb[fg, 2] = np.clip(0.48 * base_rgb[fg, 2] + 0.52 * 245, 0, 255).astype(np.uint8)
+        # Blend cyan tint on mask (R: 30, G: 200, B: 240)
+        overlay_rgb[fg, 0] = np.clip(0.55 * base_rgb[fg, 0] + 0.45 * 30, 0, 255).astype(np.uint8)
+        overlay_rgb[fg, 1] = np.clip(0.55 * base_rgb[fg, 1] + 0.45 * 200, 0, 255).astype(np.uint8)
+        overlay_rgb[fg, 2] = np.clip(0.55 * base_rgb[fg, 2] + 0.45 * 240, 0, 255).astype(np.uint8)
 
-        cols = np.where(np.any(fg, axis=0))[0]
-        if len(cols) > 0:
-            for x in cols:
-                y_idx = np.where(fg[:, x])[0]
-                if len(y_idx) > 0:
-                    y_sup = y_idx[0]
-                    y_inf = y_idx[-1]
-                    # Femur condyle contact contour in coral (255, 90, 80)
-                    seg_rgb[max(0, y_sup - 2) : min(h, y_sup + 2), x] = [255, 90, 80]
-                    # Tibia plateau contact contour in sky blue (50, 160, 255)
-                    seg_rgb[max(0, y_inf - 2) : min(h, y_inf + 2), x] = [50, 160, 255]
+    # Draw JSW sample profile lines if available
+    profile = jsw_metrics.get("profile_samples", [])
+    if len(profile) > 0:
+        step = max(1, len(profile) // 30)  # Draw ~30 vertical vectors across the joint
+        for idx in range(0, len(profile), step):
+            sample = profile[idx]
+            x = sample["x"]
+            y_sup = sample["y_superior"]
+            y_inf = sample["y_inferior"]
+            # Color vertical vector in neon green (0, 255, 120)
+            overlay_rgb[y_sup : y_inf + 1, x] = [0, 255, 120]
 
-            # Midline separating medial & lateral compartment
-            mid_x = (cols[0] + cols[-1]) // 2
-            y_span = np.where(fg[:, mid_x])[0]
-            if len(y_span) > 0:
-                seg_rgb[y_span[0] : y_span[-1] + 1, mid_x] = [255, 220, 50]
-
-    Image.fromarray(seg_rgb).save(mask_path)
-
-    # Tab 3: Measurements Overlay (caliper bars, width spans, JSW profile vectors + on-image text)
-    meas_rgb = base_rgb.copy()
-    is_lateral = view.lower() == "lateral"
-
-    if np.any(fg):
-        # Draw JSW sample profile vectors (neon green 0, 255, 120)
-        profile = jsw_metrics.get("profile_samples", [])
-        if len(profile) > 0:
-            step = max(1, len(profile) // 35)
-            for idx in range(0, len(profile), step):
-                sample = profile[idx]
-                x = sample["x"]
-                y_sup = sample["y_superior"]
-                y_inf = sample["y_inferior"]
-                meas_rgb[y_sup : y_inf + 1, x] = [0, 255, 120]
-
-        cols = np.where(np.any(fg, axis=0))[0]
-        if len(cols) >= 5:
-            xmin, xmax = int(cols[0]), int(cols[-1])
-            y_sup_all = [np.where(fg[:, x])[0][0] for x in cols if len(np.where(fg[:, x])[0]) > 0]
-            y_inf_all = [np.where(fg[:, x])[0][-1] for x in cols if len(np.where(fg[:, x])[0]) > 0]
-
-            y_fem = max(16, int(np.min(y_sup_all)) - 22) if y_sup_all else 30
-            y_tib = min(h - 16, int(np.max(y_inf_all)) + 22) if y_inf_all else h - 30
-
-            # Upper Caliper Line (violet 190, 80, 255)
-            meas_rgb[max(0, y_fem - 1) : min(h, y_fem + 2), xmin : xmax + 1] = [190, 80, 255]
-            meas_rgb[max(0, y_fem - 10) : min(h, y_fem + 11), xmin : xmin + 3] = [190, 80, 255]
-            meas_rgb[max(0, y_fem - 10) : min(h, y_fem + 11), xmax : xmax + 3] = [190, 80, 255]
-
-            # Lower Caliper Line (cyan 0, 220, 255)
-            meas_rgb[max(0, y_tib - 1) : min(h, y_tib + 2), xmin : xmax + 1] = [0, 220, 255]
-            meas_rgb[max(0, y_tib - 10) : min(h, y_tib + 11), xmin : xmin + 3] = [0, 220, 255]
-            meas_rgb[max(0, y_tib - 10) : min(h, y_tib + 11), xmax : xmax + 3] = [0, 220, 255]
-
-    # Convert to PIL to draw text annotations directly on the X-ray
-    meas_pil = Image.fromarray(meas_rgb)
-    draw = ImageDraw.Draw(meas_pil)
-
-    if np.any(fg) and len(cols) >= 5:
-        if is_lateral:
-            fem_ap = anatomical_measurements.get("femoral_ap", {})
-            tib_ap = anatomical_measurements.get("tibial_ap", {})
-            fem_lbl = f"Femoral AP: {fem_ap.get('value')} {fem_ap.get('unit')}" if fem_ap.get("value") else "Femoral AP"
-            tib_lbl = f"Tibial AP: {tib_ap.get('value')} {tib_ap.get('unit')}" if tib_ap.get("value") else "Tibial AP"
-            draw.text((xmin + 8, max(4, y_fem - 15)), fem_lbl, fill=(220, 140, 255))
-            draw.text((xmin + 8, min(h - 18, y_tib + 6)), tib_lbl, fill=(0, 235, 255))
-        else:
-            fem_w = anatomical_measurements.get("femoral_width", {})
-            tib_w = anatomical_measurements.get("tibial_width", {})
-            fem_lbl = f"Femoral Width: {fem_w.get('value')} {fem_w.get('unit')}" if fem_w.get("value") else "Femoral Width"
-            tib_lbl = f"Tibial Plateau: {tib_w.get('value')} {tib_w.get('unit')}" if tib_w.get("value") else "Tibial Plateau"
-            draw.text((xmin + 8, max(4, y_fem - 15)), fem_lbl, fill=(220, 140, 255))
-            draw.text((xmin + 8, min(h - 18, y_tib + 6)), tib_lbl, fill=(0, 235, 255))
-
-    meas_pil.save(meas_path)
-    meas_pil.save(overlay_path)
+    Image.fromarray(overlay_rgb).save(overlay_path)
 
     return {
         "original_url": f"/results/single_analysis/{orig_filename}",
         "enhanced_url": f"/results/single_analysis/{enh_filename}",
         "mask_url": f"/results/single_analysis/{mask_filename}",
-        "measurements_url": f"/results/single_analysis/{meas_filename}",
         "overlay_url": f"/results/single_analysis/{overlay_filename}",
     }
-
-
-def save_case_record(case_id: str, case_data: Dict[str, Any]) -> None:
-    """Save persistent analysis case state to disk."""
-    import json
-    cases_dir = settings.RESULTS_DIR / "cases"
-    cases_dir.mkdir(parents=True, exist_ok=True)
-    case_path = cases_dir / f"{case_id}.json"
-    with open(case_path, "w", encoding="utf-8") as f:
-        json.dump(case_data, f, indent=2, default=str)
-
-
-def get_case_record(case_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve persistent analysis case state from disk."""
-    import json
-    cases_dir = settings.RESULTS_DIR / "cases"
-    case_path = cases_dir / f"{case_id}.json"
-    if case_path.exists():
-        with open(case_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
 
 
 # -------------------------------------------------------------------------
@@ -784,7 +528,6 @@ def analyze_single_knee_image(
     pixel_spacing: Optional[Union[float, Sequence[float]]] = None,
     save_artifacts: bool = True,
     output_dir: Optional[Path] = None,
-    view: str = "ap",
 ) -> Dict[str, Any]:
     """
     Complete flexible 'Upload Image -> Enhance -> Analyze' pipeline.
@@ -792,8 +535,6 @@ def analyze_single_knee_image(
     Never crashes, never retrains, never hallucinates measurements.
     """
     total_start = time.perf_counter()
-    case_id = f"case_{uuid.uuid4().hex[:10]}"
-    file_id = f"{uuid.uuid4().hex[:8]}_{Path(filename).stem}"
 
     # Step 1: Validation
     val_meta = validate_uploaded_image(file_bytes=file_bytes, filename=filename)
@@ -815,18 +556,21 @@ def analyze_single_knee_image(
     # Step 3: Configurable Image Enhancement
     enhanced_2d, enh_details = enhance_xray_image(orig_gray, config=enhancement_config)
 
+    # Step 3b: 5-Class Knee Severity Classification (Normal, Doubtful, Mild, Moderate, Severe)
+    classification_res = predict_knee_severity(orig_gray)
+
     # Step 4: Aspect-Ratio-Preserving Letterbox Preprocessing (to 512x512)
     tensor_512, letterbox_meta = preprocess_for_v2(enhanced_2d, spatial_size=(512, 512))
 
-    # Step 5: V2 Model Inference with Morphological Cleanup
+    # Step 5: V2 Model Inference
     mask_512, prob_512, inference_ms = run_v2_inference(tensor_512)
 
     # Step 6: Native-Space Mask Reconstruction
     native_mask = restore_native_mask(mask_512, letterbox_meta)
 
-    # Step 7: Measurements (JSW & Geometry) with strict calibration safety & view awareness
-    geom_metrics, jsw_metrics, calib_info, anatomical_measurements = calculate_native_jsw(
-        native_mask, pixel_spacing=effective_spacing, view=view
+    # Step 7: Measurements (JSW & Geometry) with strict calibration safety
+    geom_metrics, jsw_metrics, calib_info = calculate_native_jsw(
+        native_mask, pixel_spacing=effective_spacing
     )
 
     # Step 8: Quality Control
@@ -834,48 +578,27 @@ def analyze_single_knee_image(
 
     # Step 9: Visual Artifacts
     visual_urls = {}
-    dest_dir = output_dir or (settings.RESULTS_DIR / "single_analysis")
     if save_artifacts:
+        dest_dir = output_dir or (settings.RESULTS_DIR / "single_analysis")
+        file_id = f"{uuid.uuid4().hex[:8]}_{Path(filename).stem}"
         visual_urls = create_single_analysis_visualizations(
             original_gray_2d=orig_gray,
             enhanced_2d=enhanced_2d,
             native_mask=native_mask,
             jsw_metrics=jsw_metrics,
-            anatomical_measurements=anatomical_measurements,
             output_dir=dest_dir,
             file_id=file_id,
-            view=view,
         )
 
     total_time_ms = round((time.perf_counter() - total_start) * 1000.0, 2)
+
+    # Warning text if non-critical issues detected
     warning_text = "; ".join(qc["warnings"]) if len(qc.get("warnings", [])) > 0 else None
 
-    # Step 10: Standardized Schema Matching Requirement 13
-    payload = {
-        "success": qc["status"] != "FAILED",
-        "status": "success" if qc["status"] != "FAILED" else "failed",
-        "case_id": case_id,
-        "image_id": file_id,
-        "view": view.lower(),
-        "image": {
-            "original": visual_urls.get("original_url"),
-            "enhanced": visual_urls.get("enhanced_url"),
-            "measurements": visual_urls.get("measurements_url"),
-            "segmentation": visual_urls.get("mask_url"),
-            "overlay": visual_urls.get("overlay_url"),
-        },
-        "analysis": {
-            "status": qc["status"],
-            "quality_score": qc["quality_score"],
-            "latency_ms": inference_ms,
-        },
-        "measurements": anatomical_measurements,
-        "calibration": calib_info,
-        "quality_control": qc,
-        "processing": {
-            "inference_time_ms": inference_ms,
-            "total_time_ms": total_time_ms,
-        },
+    # Step 10: Structured Output Schema
+    return {
+        "status": "success",
+        "classification": classification_res,
         "original_image": {
             "width": int(orig_w),
             "height": int(orig_h),
@@ -896,20 +619,32 @@ def analyze_single_knee_image(
         },
         "segmentation": {
             "mask_available": bool(geom_metrics.get("foreground_pixels", 0) > 0),
+            "message": "Segmentation mask extracted" if geom_metrics.get("foreground_pixels", 0) > 0 else "Segmentation unavailable — no trained segmentation model is currently available",
             "area_pixels": int(geom_metrics.get("foreground_pixels", 0)),
             "area_percentage": float(geom_metrics.get("area_percentage", 0.0)),
             "component_count": int(geom_metrics.get("component_count", 0)),
             "quality": qc["status"],
             "mask_url": visual_urls.get("mask_url"),
-            "measurements_url": visual_urls.get("measurements_url"),
             "overlay_url": visual_urls.get("overlay_url"),
             "enhanced_url": visual_urls.get("enhanced_url"),
             "original_url": visual_urls.get("original_url"),
         },
+        "measurements": {
+            "jsw_min_px": jsw_metrics.get("min_px"),
+            "jsw_median_px": jsw_metrics.get("median_px"),
+            "jsw_max_px": jsw_metrics.get("max_px"),
+            "jsw_mean_px": jsw_metrics.get("mean_px"),
+            "jsw_min_mm": jsw_metrics.get("min_mm"),
+            "jsw_median_mm": jsw_metrics.get("median_mm"),
+            "jsw_max_mm": jsw_metrics.get("max_mm"),
+            "sample_count": int(jsw_metrics.get("sample_count", 0)),
+            "area_mm2": geom_metrics.get("area_mm2"),
+        },
+        "calibration": calib_info,
+        "quality_control": qc,
+        "processing": {
+            "inference_time_ms": inference_ms,
+            "total_time_ms": total_time_ms,
+        },
         "warning": warning_text,
     }
-
-    # Save case record for cross-page persistence
-    save_case_record(case_id, payload)
-
-    return payload

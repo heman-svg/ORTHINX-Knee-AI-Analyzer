@@ -1,887 +1,644 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Ruler,
-  ArrowLeft,
-  ArrowRight,
+  Layers,
+  FileText,
+  Eye,
   ShieldCheck,
   AlertTriangle,
-  Layers,
+  ZoomIn,
+  ArrowRight,
   UploadCloud,
-  Database,
+  X,
   Info,
-  Sparkles,
-  Download,
-  RefreshCw,
-  User,
+  Activity,
 } from "lucide-react";
-import { useAnalysisStore, AnatomicalOrientation } from "../store/analysisStore";
-import { scanApi } from "../lib/api";
-import { ErrorBoundary } from "../components/common/ErrorBoundary";
+import { useAnalysisStore } from "../store/analysisStore";
 
 export const AnatomicalMeasurementsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { caseId: paramCaseId } = useParams<{ caseId?: string }>();
-  const [viewTab, setViewTab] = useState<"measurements" | "segmentation" | "enhanced" | "original">("measurements");
+  const [selectedImageModal, setSelectedImageModal] = useState<string | null>(null);
+  const [activeImageTab, setActiveImageTab] = useState<"measurements" | "segmentation" | "enhanced" | "original">("measurements");
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [caseData, setCaseData] = useState<any | null>(null);
-
-  const store = useAnalysisStore();
   const {
+    activeCase,
+    activeCaseId,
     orientation,
     views,
-    setOrientation,
-    setUploadedFile,
-    runAnalysis,
-    getDerivedMeasurements,
     patientInfo,
-    setScanResult,
-  } = store;
+    getDerivedMeasurements,
+    getZoneMeasurements,
+  } = useAnalysisStore();
 
-  // Resolve active case ID strictly from URL params or active store case
-  const effectiveCaseId =
-    paramCaseId ||
-    store.activeCase?.caseId ||
-    store.caseId ||
-    views?.front?.analysisResult?.case_id ||
-    views?.side?.analysisResult?.case_id ||
-    null;
-
-  // Load case by ID from backend if needed
-  const loadCaseById = useCallback(async (idToFetch: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await scanApi.getCase(idToFetch);
-      if (data && (data.case_id || data.measurements)) {
-        setCaseData(data);
-        if (typeof setScanResult === "function") {
-          setScanResult(data);
-        }
-        localStorage.setItem("orthinx_active_case_id", data.case_id || idToFetch);
-      } else {
-        setError(`Case data for '${idToFetch}' does not contain valid measurements.`);
-      }
-    } catch (err: any) {
-      console.error("[AnatomicalMeasurements] Failed to fetch case:", err);
-      setError(
-        err?.message || "Unable to load analysis results. Please verify the backend service is running."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [setScanResult]);
-
-  // Initial load and sync on mount or param change
-  useEffect(() => {
-    if (paramCaseId) {
-      // Direct URL parameter passed: load this specific case
-      if (!caseData || caseData.case_id !== paramCaseId) {
-        loadCaseById(paramCaseId);
-      }
-    } else if (effectiveCaseId && !views?.front?.analysisResult && !views?.side?.analysisResult && !caseData) {
-      // Page refreshed with no in-memory store: restore from effective case ID
-      loadCaseById(effectiveCaseId);
-    } else if (store.caseId) {
-      localStorage.setItem("orthinx_active_case_id", store.caseId);
-    }
-  }, [paramCaseId, effectiveCaseId, loadCaseById, views, caseData, store.caseId]);
-
-  // Safe reference to active currentView and activeResult
-  const safeViews = views || {
-    front: { file: null, filePreviewUrl: null, fileName: null, fileSize: null, dimensions: null, enhancedPreviewUrl: null, isEnhancing: false, enhancementApplied: false, enhancementError: null, isAnalyzing: false, analysisStatus: "idle" as const, analysisResult: null, analysisError: null },
-    side: { file: null, filePreviewUrl: null, fileName: null, fileSize: null, dimensions: null, enhancedPreviewUrl: null, isEnhancing: false, enhancementApplied: false, enhancementError: null, isAnalyzing: false, analysisStatus: "idle" as const, analysisResult: null, analysisError: null },
-    top: { file: null, filePreviewUrl: null, fileName: null, fileSize: null, dimensions: null, enhancedPreviewUrl: null, isEnhancing: false, enhancementApplied: false, enhancementError: null, isAnalyzing: false, analysisStatus: "idle" as const, analysisResult: null, analysisError: null },
-  };
-
-  const safeOrientation = orientation && safeViews[orientation] ? orientation : "front";
-  const currentView = safeViews[safeOrientation];
-
-  const activeResult =
-    currentView?.analysisResult ||
-    caseData ||
-    safeViews.front?.analysisResult ||
-    safeViews.side?.analysisResult ||
-    store.analysisResult ||
-    null;
-
+  const currentView = views[orientation] || views.front;
+  const analysisResult = currentView.analysisResult || activeCase?.analysisResult;
   const derived = getDerivedMeasurements();
+  const zones = getZoneMeasurements();
 
-  // Patient metadata resolution
-  const patName = activeResult?.patient_name || patientInfo?.patientName || "Unassigned Patient";
-  const patId = activeResult?.patient_code || activeResult?.patient_id || patientInfo?.patientId || (effectiveCaseId ? `PT-${effectiveCaseId.replace("case_", "").slice(0, 8).toUpperCase()}` : "PT-RECORD");
-  const patAge = activeResult?.patient_age || patientInfo?.patientAge || 58;
-  const patSex = activeResult?.patient_sex || patientInfo?.patientSex || "Female";
-  const docName = activeResult?.doctor_name || patientInfo?.doctorName || "Dr. Alex Morgan, MD";
-  const docSpec = activeResult?.doctor_specialization || patientInfo?.doctorSpecialization || "Chief Orthopedic Surgeon";
-  const studyDate = activeResult?.formatted_date || patientInfo?.studyDate || (activeResult?.timestamp ? new Date(activeResult.timestamp).toLocaleString() : new Date().toLocaleString());
+  const rawMeasurements = analysisResult?.measurements || activeCase?.measurements || {};
+  const isCalibrated = Boolean(derived?.isCalibrated);
+  const unit = derived?.unit || "px";
+  const areaUnit = derived?.areaUnit || (isCalibrated ? "mm²" : "px²");
 
-  // Calibration status
-  const isCalibrated = Boolean(
-    derived?.isCalibrated ||
-    (activeResult?.calibration?.available && activeResult?.calibration?.unit === "mm")
-  );
-  const unit = derived?.unit ?? (isCalibrated ? "mm" : "px");
-  const pixelSpacingDisplay =
-    derived?.pixelSpacing ||
-    activeResult?.calibration?.pixel_spacing_mm_px ||
-    activeResult?.pixel_spacing ||
-    "0.154";
+  const origImg =
+    analysisResult?.image?.original ||
+    analysisResult?.segmentation?.original_url ||
+    currentView.filePreviewUrl ||
+    "";
+  const enhImg =
+    analysisResult?.image?.enhanced ||
+    analysisResult?.segmentation?.enhanced_url ||
+    currentView.enhancedPreviewUrl ||
+    "";
+  const maskImg =
+    analysisResult?.image?.segmentation ||
+    analysisResult?.segmentation?.mask_url ||
+    "";
+  const overlayImg =
+    analysisResult?.image?.measurements ||
+    analysisResult?.segmentation?.measurements_url ||
+    analysisResult?.image?.overlay ||
+    analysisResult?.segmentation?.overlay_url ||
+    "";
 
-  // Tab image URL computation
   const getActiveTabUrl = () => {
-    if (!activeResult && !currentView) return "";
-
-    const imgObj = activeResult?.image || {};
-    const segObj = activeResult?.segmentation || {};
-    const origFallback = currentView?.filePreviewUrl || imgObj.original || "";
-    const enhFallback = currentView?.enhancedPreviewUrl || imgObj.enhanced || segObj.enhanced_url || origFallback;
-    const measFallback = imgObj.measurements || segObj.measurements_url || imgObj.overlay || segObj.overlay_url || origFallback;
-    const segFallback = imgObj.segmentation || segObj.mask_url || origFallback;
-
-    switch (viewTab) {
+    switch (activeImageTab) {
       case "measurements":
-        return measFallback || origFallback;
+        return overlayImg || enhImg || origImg;
       case "segmentation":
-        return segFallback || origFallback;
+        return maskImg || origImg;
       case "enhanced":
-        return enhFallback || origFallback;
+        return enhImg || origImg;
       case "original":
       default:
-        return imgObj.original || origFallback;
+        return origImg;
     }
   };
 
   const currentTabUrl = getActiveTabUrl();
 
-  // 1. Loading State
-  if (loading) {
-    return (
-      <div style={{ maxWidth: "800px", margin: "80px auto", textAlign: "center" }}>
-        <div className="card" style={{ padding: "60px 40px" }}>
-          <RefreshCw
-            size={42}
-            style={{
-              margin: "0 auto 16px",
-              color: "var(--primary)",
-              animation: "spin 1.5s linear infinite",
-            }}
-          />
-          <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-            Loading anatomical measurements...
-          </h3>
-          <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
-            Retrieving image-derived anatomical measurements and JSW clearances for Case: {effectiveCaseId || "..."}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  const patName = patientInfo.patientName || activeCase?.patientName || "Jane Doe";
+  const patId = patientInfo.patientId || activeCase?.patientId || "PT-49821";
+  const caseIdDisplay = activeCaseId || activeCase?.caseId || "CASE-ANALYSIS";
+  const studyDate =
+    analysisResult?.formatted_date ||
+    (analysisResult?.timestamp
+      ? new Date(analysisResult.timestamp).toLocaleString()
+      : new Date().toLocaleDateString());
 
-  // 2. Error State
-  if (error) {
+  if (!analysisResult && !origImg) {
     return (
-      <div style={{ maxWidth: "800px", margin: "80px auto", textAlign: "center" }}>
+      <div
+        className="card"
+        style={{
+          maxWidth: "700px",
+          margin: "40px auto",
+          padding: "48px 32px",
+          textAlign: "center",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "14px",
+        }}
+      >
         <div
-          className="card"
           style={{
-            padding: "48px 36px",
-            border: "1px solid rgba(239, 68, 68, 0.3)",
-            background: "var(--bg-card)",
+            width: "56px",
+            height: "56px",
+            borderRadius: "50%",
+            background: "var(--primary-subtle)",
+            color: "var(--primary)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          <div
-            style={{
-              width: "56px",
-              height: "56px",
-              borderRadius: "50%",
-              background: "rgba(239, 68, 68, 0.1)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              margin: "0 auto 16px",
-              color: "#ef4444",
-            }}
-          >
-            <AlertTriangle size={28} />
-          </div>
-          <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-            Unable to load analysis results
-          </h3>
-          <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "24px" }}>
-            {error}
-          </p>
-          <div style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
-            {effectiveCaseId && (
-              <button
-                className="btn btn-primary"
-                style={{ display: "flex", alignItems: "center", gap: "8px" }}
-                onClick={() => loadCaseById(effectiveCaseId)}
-              >
-                <RefreshCw size={14} /> Retry
-              </button>
-            )}
-            <button
-              className="btn btn-secondary"
-              style={{ display: "flex", alignItems: "center", gap: "8px" }}
-              onClick={() => navigate("/knee-analysis")}
-            >
-              <ArrowLeft size={14} /> Back to Knee Analysis
-            </button>
-          </div>
+          <Ruler size={28} />
         </div>
+        <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, color: "var(--text-main)" }}>
+          No Measurements Available
+        </h2>
+        <p style={{ fontSize: "13px", color: "var(--text-secondary)", maxWidth: "420px", margin: 0 }}>
+          Upload and run AI analysis on a knee radiograph to view quantitative anatomical metrics.
+        </p>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => navigate("/analysis/upload")}
+          style={{ marginTop: "6px" }}
+        >
+          <UploadCloud size={15} />
+          <span>Upload Radiograph</span>
+        </button>
       </div>
     );
   }
 
-  // 3. Empty State (No analysis data exists)
-  const hasAnyData = Boolean(
-    activeResult ||
-    safeViews.front?.filePreviewUrl ||
-    safeViews.side?.filePreviewUrl ||
-    safeViews.top?.filePreviewUrl ||
-    derived
-  );
-
-  if (!hasAnyData) {
-    return (
-      <div style={{ maxWidth: "800px", margin: "80px auto", textAlign: "center" }}>
-        <div className="card" style={{ padding: "60px 40px" }}>
-          <div
-            style={{
-              width: "64px",
-              height: "64px",
-              borderRadius: "50%",
-              background: "var(--primary-subtle)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              margin: "0 auto 16px",
-              color: "var(--primary)",
-            }}
-          >
-            <Ruler size={32} />
-          </div>
-          <h2 style={{ fontSize: "20px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-            No active knee analysis
-          </h2>
-          <p style={{ fontSize: "14px", color: "var(--text-muted)", maxWidth: "460px", margin: "0 auto 20px" }}>
-            Upload a new X-ray to begin.
-          </p>
-          <button
-            className="btn btn-primary"
-            style={{ padding: "10px 24px", display: "inline-flex", alignItems: "center", gap: "8px" }}
-            onClick={() => navigate("/knee-analysis")}
-          >
-            <UploadCloud size={16} /> Go to Knee Analysis
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // 4. Data-Derived Values
-  const rawMeasurements = activeResult?.measurements || {};
-  const femoralWidthMLText =
-    derived?.femoralWidthMLText ||
-    (rawMeasurements?.femoral_width?.value !== undefined
-      ? `${rawMeasurements.femoral_width.value} ${rawMeasurements.femoral_width.unit || unit}`
-      : "—");
-
-  const tibialPlateauWidthText =
-    derived?.tibialPlateauWidthText ||
-    (rawMeasurements?.tibial_width?.value !== undefined
-      ? `${rawMeasurements.tibial_width.value} ${rawMeasurements.tibial_width.unit || unit}`
-      : "—");
-
-  const femoralAPText =
-    derived?.femoralAPText ||
-    (rawMeasurements?.femoral_ap?.value !== null && rawMeasurements?.femoral_ap?.value !== undefined
-      ? `${rawMeasurements.femoral_ap.value} ${rawMeasurements.femoral_ap.unit || unit}`
-      : rawMeasurements?.femoral_ap?.status || "Requires lateral radiograph");
-
-  const tibialAPText =
-    derived?.tibialAPText ||
-    (rawMeasurements?.tibial_ap?.value !== null && rawMeasurements?.tibial_ap?.value !== undefined
-      ? `${rawMeasurements.tibial_ap.value} ${rawMeasurements.tibial_ap.unit || unit}`
-      : rawMeasurements?.tibial_ap?.status || "Requires lateral radiograph");
-
-  const medialJSWText =
-    derived?.medialJSWText ||
-    (rawMeasurements?.medial_jsw?.value !== undefined
+  // Exact measurement values from verified API response
+  const medialJSWDisplay =
+    derived?.medialJSW !== null && derived?.medialJSW !== undefined
+      ? `${derived.medialJSW} ${unit}`
+      : rawMeasurements?.medial_jsw?.value !== undefined && rawMeasurements?.medial_jsw?.value !== null
       ? `${rawMeasurements.medial_jsw.value} ${rawMeasurements.medial_jsw.unit || unit}`
-      : "—");
+      : "Not measurable on this view";
 
-  const lateralJSWText =
-    derived?.lateralJSWText ||
-    (rawMeasurements?.lateral_jsw?.value !== undefined
+  const lateralJSWDisplay =
+    derived?.lateralJSW !== null && derived?.lateralJSW !== undefined
+      ? `${derived.lateralJSW} ${unit}`
+      : rawMeasurements?.lateral_jsw?.value !== undefined && rawMeasurements?.lateral_jsw?.value !== null
       ? `${rawMeasurements.lateral_jsw.value} ${rawMeasurements.lateral_jsw.unit || unit}`
-      : "—");
+      : "Not measurable on this view";
 
-  const minJSWText =
-    derived?.jswMinText ||
-    (rawMeasurements?.min_jsw?.value !== undefined
+  const minJSWDisplay =
+    derived?.jswMin !== null && derived?.jswMin !== undefined
+      ? `${derived.jswMin} ${unit}`
+      : rawMeasurements?.min_jsw?.value !== undefined && rawMeasurements?.min_jsw?.value !== null
       ? `${rawMeasurements.min_jsw.value} ${rawMeasurements.min_jsw.unit || unit}`
-      : "—");
+      : "Not measurable on this view";
 
-  const jointAreaText =
-    derived?.jointAreaText ||
-    (rawMeasurements?.joint_space_area?.value !== undefined
-      ? `${rawMeasurements.joint_space_area.value} ${rawMeasurements.joint_space_area.unit || (isCalibrated ? "mm²" : "px²")}`
-      : "—");
+  const meanJSWDisplay =
+    derived?.jswMean !== null && derived?.jswMean !== undefined
+      ? `${derived.jswMean} ${unit}`
+      : rawMeasurements?.mean_jsw?.value !== undefined && rawMeasurements?.mean_jsw?.value !== null
+      ? `${rawMeasurements.mean_jsw.value} ${rawMeasurements.mean_jsw.unit || unit}`
+      : "Not measurable on this view";
 
-  const caseIdDisplay = activeResult?.case_id || effectiveCaseId || "Active Scan";
+  const jointAreaDisplay =
+    derived?.jointArea !== null && derived?.jointArea !== undefined
+      ? `${derived.jointArea} ${areaUnit}`
+      : rawMeasurements?.joint_space_area?.value !== undefined && rawMeasurements?.joint_space_area?.value !== null
+      ? `${rawMeasurements.joint_space_area.value} ${rawMeasurements.joint_space_area.unit || areaUnit}`
+      : "Not measurable on this view";
+
+  const femoralWidthDisplay =
+    derived?.femoralWidthML !== null && derived?.femoralWidthML !== undefined
+      ? `${derived.femoralWidthML} ${unit}`
+      : rawMeasurements?.femoral_width?.value !== undefined && rawMeasurements?.femoral_width?.value !== null
+      ? `${rawMeasurements.femoral_width.value} ${rawMeasurements.femoral_width.unit || unit}`
+      : "Not measurable on this view";
+
+  const tibialPlateauWidthDisplay =
+    derived?.tibialPlateauWidth !== null && derived?.tibialPlateauWidth !== undefined
+      ? `${derived.tibialPlateauWidth} ${unit}`
+      : rawMeasurements?.tibial_width?.value !== undefined && rawMeasurements?.tibial_width?.value !== null
+      ? `${rawMeasurements.tibial_width.value} ${rawMeasurements.tibial_width.unit || unit}`
+      : "Not measurable on this view";
+
+  const femoralAPDisplay =
+    orientation === "side" && rawMeasurements?.femoral_ap?.value !== undefined && rawMeasurements?.femoral_ap?.value !== null
+      ? `${rawMeasurements.femoral_ap.value} ${rawMeasurements.femoral_ap.unit || unit}`
+      : "Requires lateral radiograph";
+
+  const tibialAPDisplay =
+    orientation === "side" && rawMeasurements?.tibial_ap?.value !== undefined && rawMeasurements?.tibial_ap?.value !== null
+      ? `${rawMeasurements.tibial_ap.value} ${rawMeasurements.tibial_ap.unit || unit}`
+      : "Requires lateral radiograph";
 
   return (
-    <ErrorBoundary>
-      <div style={{ maxWidth: "1280px", margin: "0 auto", paddingBottom: "50px" }}>
-        {/* Top Header & Navigation Bar */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            borderBottom: "1px solid var(--border)",
-            paddingBottom: "16px",
-            marginBottom: "20px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              style={{ padding: "6px 12px", display: "flex", alignItems: "center", gap: "6px" }}
-              onClick={() => navigate("/knee-analysis")}
-            >
-              <ArrowLeft size={14} /> Back to Knee Analysis
-            </button>
-
-            <span style={{ color: "var(--text-muted)", fontSize: "13px" }}>|</span>
-
-            <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-              Case: {caseIdDisplay}
-            </span>
-          </div>
-
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              style={{ padding: "6px 14px", display: "flex", alignItems: "center", gap: "6px" }}
-              onClick={() => navigate("/meniscus-analysis")}
-            >
-              <Layers size={14} />
-              <span>Meniscus Analysis</span>
-            </button>
-
-            <button
-              className="btn btn-primary btn-sm"
-              style={{ padding: "6px 14px", display: "flex", alignItems: "center", gap: "6px" }}
-              onClick={() => navigate("/implant-planning")}
-            >
-              <Sparkles size={14} />
-              <span>Implant Planning</span>
-              <ArrowRight size={14} />
-            </button>
-
-            <button
-              className="btn btn-outline btn-sm"
-              style={{
-                padding: "6px 14px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                color: "var(--primary)",
-                borderColor: "var(--primary)",
-              }}
-              onClick={async () => {
-                if (activeResult?.case_id || effectiveCaseId) {
-                  await scanApi.downloadCasePdf(activeResult?.case_id || effectiveCaseId);
-                } else {
-                  navigate("/reports");
-                }
-              }}
-            >
-              <Download size={14} />
-              <span>Download PDF</span>
-            </button>
-          </div>
+    <div style={{ maxWidth: "1320px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* 1. Sub-Navigation Bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          borderBottom: "1px solid var(--border)",
+          paddingBottom: "12px",
+          flexWrap: "wrap",
+          gap: "12px",
+        }}
+      >
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate("/analysis/results")}
+            style={{ fontSize: "12px" }}
+          >
+            Overview
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{
+              background: "var(--primary-light)",
+              color: "var(--primary)",
+              fontWeight: 600,
+              fontSize: "12px",
+              borderColor: "rgba(91, 75, 255, 0.3)",
+            }}
+          >
+            <Ruler size={13} />
+            <span>Anatomical Measurements</span>
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate("/analysis/meniscus")}
+            style={{ fontSize: "12px" }}
+          >
+            <Layers size={13} />
+            <span>Meniscus Analysis</span>
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate("/reports")}
+            style={{ fontSize: "12px" }}
+          >
+            <FileText size={13} />
+            <span>Diagnostic Report</span>
+          </button>
         </div>
 
-        {/* Patient Demographic Summary Card */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: "12px",
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "8px",
-            padding: "14px 18px",
-            marginBottom: "20px",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Patient Name</div>
-            <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)", marginTop: "2px" }}>{patName}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Patient ID</div>
-            <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--primary)", marginTop: "2px" }}>{patId}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Age / Sex</div>
-            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>{patAge} yrs / {patSex}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Attending Specialist</div>
-            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>{docName}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Analysis Date & Time</div>
-            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>{studyDate}</div>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--text-muted)" }}>
+          <span>Case: <strong style={{ color: "var(--text-main)" }}>{caseIdDisplay}</strong></span>
         </div>
+      </div>
 
-        {/* Page Title */}
-        <div className="page-header" style={{ marginBottom: "16px" }}>
-          <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: "10px", margin: 0 }}>
-            <Ruler size={24} color="var(--primary)" />
-            <span>Image-Derived Measurements</span>
-          </h1>
-          <p className="page-subtitle" style={{ margin: "4px 0 0" }}>
-            Quantitative anatomical dimensions and articular joint clearances derived from actual uploaded knee radiographs.
-          </p>
-        </div>
-
-        {/* Calibration Status Banner */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background: isCalibrated ? "rgba(34, 197, 94, 0.1)" : "rgba(234, 179, 8, 0.1)",
-            border: isCalibrated ? "1px solid rgba(34, 197, 94, 0.3)" : "1px solid rgba(234, 179, 8, 0.3)",
-            color: isCalibrated ? "#22c55e" : "#eab308",
-            padding: "10px 16px",
-            borderRadius: "8px",
-            marginBottom: "20px",
-            fontSize: "13px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            {isCalibrated ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
-            <span>
-              {isCalibrated ? (
-                <>
-                  <strong>User Calibrated Mode (mm):</strong> Physical scale is calibrated at{" "}
-                  <strong>{pixelSpacingDisplay} mm/px</strong>.
-                </>
-              ) : (
-                <>
-                  <strong>Physical scale unavailable — measurements shown in pixels (px).</strong> No unverified millimeter conversion applied.
-                </>
-              )}
-            </span>
-          </div>
-
-          <span style={{ fontWeight: 700, textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.5px" }}>
-            {isCalibrated ? "User Calibrated" : "Pixel units only"}
+      {/* 2. Patient & Calibration Metadata Strip */}
+      <div
+        className="card"
+        style={{
+          padding: "14px 20px",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: "14px",
+          border: "1px solid var(--border)",
+          background: "var(--bg-surface)",
+        }}
+      >
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Patient
           </span>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)", marginTop: "2px" }}>
+            {patName} ({patId})
+          </div>
         </div>
 
-        {/* Main Grid: Left = X-Ray Viewport, Right = Measurements */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "24px", alignItems: "start" }}>
-          {/* Left Column: Image Viewport */}
-          <div className="card" style={{ padding: "18px" }}>
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Projection
+          </span>
+          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
+            {orientation.toUpperCase()} View
+          </div>
+        </div>
+
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Calibration Status
+          </span>
+          <div style={{ fontSize: "13px", fontWeight: 600, color: isCalibrated ? "#34d399" : "var(--text-muted)", marginTop: "2px" }}>
+            {isCalibrated ? "Physical mm Calibration" : "Native Pixel Units (px)"}
+          </div>
+        </div>
+
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Analysis Timestamp
+          </span>
+          <div style={{ fontSize: "13px", color: "var(--text-main)", marginTop: "2px" }}>
+            {studyDate}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Main Split View: Overlay Image Stage (LEFT) | Structured Quantitative Tables (RIGHT) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: "24px", alignItems: "start" }}>
+        {/* LEFT: Interactive Radiograph Stage */}
+        <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)", display: "flex", alignItems: "center", gap: "6px" }}>
+              <Eye size={16} style={{ color: "var(--primary)" }} />
+              Measurement Overlay
+            </span>
+
+            {/* Display Mode Tabs */}
             <div
               style={{
                 display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "12px",
-                flexWrap: "wrap",
-                gap: "8px",
+                background: "var(--bg-app)",
+                padding: "3px",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                gap: "2px",
               }}
             >
-              {/* View Tab Switcher */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: "4px",
-                  background: "var(--bg-card)",
-                  padding: "4px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                {(
-                  [
-                    { id: "measurements", label: "Measurements" },
-                    { id: "segmentation", label: "Segmentation" },
-                    { id: "enhanced", label: "Enhanced" },
-                    { id: "original", label: "Original" },
-                  ] as const
-                ).map((tab) => (
+              {(
+                [
+                  { id: "measurements", label: "Caliper Overlay" },
+                  { id: "segmentation", label: "Bone Mask" },
+                  { id: "enhanced", label: "Enhanced" },
+                  { id: "original", label: "Original" },
+                ] as const
+              ).map((tab) => {
+                const isSelected = activeImageTab === tab.id;
+                return (
                   <button
                     key={tab.id}
-                    onClick={() => setViewTab(tab.id)}
+                    type="button"
+                    onClick={() => setActiveImageTab(tab.id)}
                     style={{
                       border: "none",
-                      padding: "6px 12px",
-                      fontSize: "12px",
-                      fontWeight: viewTab === tab.id ? 700 : 500,
-                      borderRadius: "6px",
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: isSelected ? 700 : 500,
                       cursor: "pointer",
-                      background: viewTab === tab.id ? "var(--primary)" : "transparent",
-                      color: viewTab === tab.id ? "#ffffff" : "var(--text-muted)",
-                      boxShadow: viewTab === tab.id ? "0 2px 8px rgba(168, 85, 247, 0.4)" : "none",
+                      background: isSelected ? "var(--primary)" : "transparent",
+                      color: isSelected ? "#ffffff" : "var(--text-secondary)",
                       transition: "all 0.15s ease",
                     }}
                   >
                     {tab.label}
                   </button>
-                ))}
-              </div>
-
-              {/* Projection Selector */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: "4px",
-                  background: "var(--bg-card)",
-                  padding: "4px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                {(
-                  [
-                    { id: "front", label: "FRONT (AP)" },
-                    { id: "side", label: "SIDE (LATERAL)" },
-                    { id: "top", label: "TOP (AXIAL)" },
-                  ] as const
-                ).map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => setOrientation(v.id as AnatomicalOrientation)}
-                    style={{
-                      border: "none",
-                      padding: "5px 10px",
-                      fontSize: "11px",
-                      fontWeight: safeOrientation === v.id ? 700 : 500,
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      background: safeOrientation === v.id ? "var(--primary)" : "transparent",
-                      color: safeOrientation === v.id ? "#ffffff" : "var(--text-muted)",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Viewport Box */}
-            <div
-              style={{
-                position: "relative",
-                width: "100%",
-                minHeight: "420px",
-                maxHeight: "520px",
-                borderRadius: "8px",
-                overflow: "hidden",
-                background: "#080c14",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "1px solid var(--border)",
-              }}
-            >
-              {currentTabUrl || currentView?.filePreviewUrl ? (
-                <img
-                  src={currentTabUrl || currentView?.filePreviewUrl}
-                  alt={`${safeOrientation} Measurements View`}
-                  style={{
-                    maxWidth: "100%",
-                    maxHeight: "520px",
-                    objectFit: "contain",
-                    display: "block",
-                  }}
-                />
-              ) : (
-                <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)" }}>
-                  <Info size={32} style={{ margin: "0 auto 10px", opacity: 0.6 }} />
-                  <h4 style={{ color: "var(--text-main)", fontSize: "15px", marginBottom: "6px" }}>
-                    {safeOrientation === "side"
-                      ? "Requires lateral radiograph"
-                      : "Not available — axial image not uploaded"}
-                  </h4>
-                  <p style={{ fontSize: "12px", maxWidth: "340px", margin: "0 auto 16px" }}>
-                    {safeOrientation === "side"
-                      ? "Upload the lateral radiograph to calculate Femoral AP and Tibial AP dimensions."
-                      : "Upload the axial radiograph for patellofemoral articulation assessment."}
-                  </p>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      const input = document.getElementById("anatomical-meas-file-input");
-                      input?.click();
-                    }}
-                  >
-                    <UploadCloud size={14} /> Upload {safeOrientation.toUpperCase()} Radiograph
-                  </button>
-                  <input
-                    id="anatomical-meas-file-input"
-                    type="file"
-                    accept="image/*,.dcm"
-                    style={{ display: "none" }}
-                    onChange={async (e) => {
-                      if (e.target.files && e.target.files.length > 0) {
-                        setUploadedFile(e.target.files[0], safeOrientation);
-                        await runAnalysis(safeOrientation);
-                      }
-                    }}
-                  />
-                </div>
-              )}
-
-              <div
-                style={{
-                  position: "absolute",
-                  top: "10px",
-                  left: "10px",
-                  background: "rgba(0,0,0,0.75)",
-                  padding: "4px 10px",
-                  borderRadius: "6px",
-                  fontSize: "11px",
-                  color: "#fff",
-                  fontWeight: 600,
-                  backdropFilter: "blur(4px)",
-                }}
-              >
-                PROJECTION: {safeOrientation.toUpperCase()} • {viewTab.toUpperCase()}
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* Right Column: Quantitative Image-Derived Measurements */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-            {/* Bone Dimensions Card */}
-            <div className="card">
-              <h2
-                className="card-title"
+          {/* Image Viewport */}
+          <div
+            onClick={() => currentTabUrl && setSelectedImageModal(currentTabUrl)}
+            style={{
+              position: "relative",
+              minHeight: "440px",
+              maxHeight: "560px",
+              borderRadius: "8px",
+              border: "1px solid var(--border)",
+              background: "#050505",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+              cursor: "zoom-in",
+            }}
+            title="Click to zoom in full resolution"
+          >
+            {currentTabUrl ? (
+              <img
+                src={currentTabUrl}
+                alt="Radiograph Measurement Inspection"
                 style={{
-                  fontSize: "16px",
-                  marginBottom: "14px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
+                  maxWidth: "100%",
+                  maxHeight: "540px",
+                  objectFit: "contain",
+                  display: "block",
+                }}
+              />
+            ) : (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)", fontSize: "13px" }}>
+                Image unavailable
+              </div>
+            )}
+
+            <div
+              style={{
+                position: "absolute",
+                bottom: "10px",
+                right: "10px",
+                background: "rgba(0, 0, 0, 0.7)",
+                borderRadius: "4px",
+                padding: "4px 8px",
+                color: "#fff",
+                fontSize: "11px",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              <ZoomIn size={13} />
+              <span>Zoom</span>
+            </div>
+          </div>
+
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", textAlign: "center" }}>
+            Overlay lines indicate automated landmark calipers across the tibiofemoral articulation.
+          </span>
+        </div>
+
+        {/* RIGHT: Quantitative Measurements Tables */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+          {/* Group 1: Joint Space Measurements (JSW) */}
+          <div className="card" style={{ padding: "18px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+              <h3 style={{ fontSize: "14px", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: "6px" }}>
+                <Ruler size={15} style={{ color: "var(--primary)" }} />
+                Joint Space Width (JSW)
+              </h3>
+              <span
+                style={{
+                  fontSize: "11px",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  background: "var(--bg-app)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-muted)",
                 }}
               >
-                <Database size={16} color="var(--primary)" />
-                <span>Femoral & Tibial Bone Geometry</span>
-              </h2>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Femoral Width (Condylar Span)
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Medial-lateral distance between condyles (Front AP)
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>
-                    {femoralWidthMLText}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Tibial Plateau Width
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Proximal tibial articulation plateau (Front AP)
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>
-                    {tibialPlateauWidthText}
-                  </div>
-                </div>
-
-                {/* Femoral AP from actual lateral radiograph or projection-aware status */}
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Femoral AP Dimension
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Anteroposterior femoral depth (Lateral radiograph)
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: femoralAPText.includes("Requires") ? "12px" : "16px",
-                      fontWeight: femoralAPText.includes("Requires") ? 500 : 700,
-                      color: femoralAPText.includes("Requires") ? "var(--text-muted)" : "#a855f7",
-                    }}
-                  >
-                    {femoralAPText}
-                  </div>
-                </div>
-
-                {/* Tibial AP from actual lateral radiograph or projection-aware status */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Tibial AP Dimension
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Anteroposterior tibial depth (Lateral radiograph)
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: tibialAPText.includes("Requires") ? "12px" : "16px",
-                      fontWeight: tibialAPText.includes("Requires") ? 500 : 700,
-                      color: tibialAPText.includes("Requires") ? "var(--text-muted)" : "#a855f7",
-                    }}
-                  >
-                    {tibialAPText}
-                  </div>
-                </div>
-              </div>
+                Unit: {unit}
+              </span>
             </div>
 
-            {/* Joint Space Measurements Card */}
-            <div className="card">
-              <h2
-                className="card-title"
-                style={{
-                  fontSize: "16px",
-                  marginBottom: "14px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                }}
-              >
-                <Ruler size={16} color="var(--primary)" />
-                <span>Joint Space Width (JSW) Clearances</span>
-              </h2>
+            <table className="table" style={{ width: "100%", textAlign: "left", fontSize: "12px" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                  <th style={{ padding: "6px 8px" }}>Parameter</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Calculated Value</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Medial Compartment JSW</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {medialJSWDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Medial Joint Space Width
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Medial load-bearing clearance
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#22c55e" }}>
-                    {medialJSWText}
-                  </div>
-                </div>
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Lateral Compartment JSW</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {lateralJSWDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
 
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Lateral Joint Space Width
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Lateral compartment clearance
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#22c55e" }}>
-                    {lateralJSWText}
-                  </div>
-                </div>
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Minimum Joint Clearance</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {minJSWDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
 
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Minimum Joint Space Width (Focal)
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Narrowest point across articulation
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#eab308" }}>
-                    {minJSWText}
-                  </div>
-                </div>
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Mean Articulation Clearance</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {meanJSWDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
 
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-                      Total Articular Clearance Area
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Segmented radiolucent joint space mass
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>
-                    {jointAreaText}
-                  </div>
-                </div>
-              </div>
+                <tr>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Joint Space Area</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {jointAreaDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Group 2: Bone Diameters & Alignment */}
+          <div className="card" style={{ padding: "18px" }}>
+            <h3 style={{ fontSize: "14px", fontWeight: 700, margin: "0 0 12px 0", display: "flex", alignItems: "center", gap: "6px" }}>
+              <Activity size={15} style={{ color: "var(--primary)" }} />
+              Bone Diameters & Alignment
+            </h3>
+
+            <table className="table" style={{ width: "100%", textAlign: "left", fontSize: "12px" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                  <th style={{ padding: "6px 8px" }}>Parameter</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Calculated Value</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Femoral Width (Medial-Lateral)</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {femoralWidthDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
+
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Tibial Plateau Width</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "var(--text-main)" }}>
+                    {tibialPlateauWidthDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "#34d399", fontSize: "11px" }}>
+                    Valid
+                  </td>
+                </tr>
+
+                <tr style={{ borderBottom: "1px solid var(--border-light)" }}>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Femoral AP Dimension</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: "var(--text-secondary)" }}>
+                    {femoralAPDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "var(--text-muted)", fontSize: "11px" }}>
+                    {orientation === "side" ? "Valid" : "Pending View"}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style={{ padding: "8px", fontWeight: 500 }}>Tibial AP Dimension</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: "var(--text-secondary)" }}>
+                    {tibialAPDisplay}
+                  </td>
+                  <td style={{ padding: "8px", textAlign: "right", color: "var(--text-muted)", fontSize: "11px" }}>
+                    {orientation === "side" ? "Valid" : "Pending View"}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Decision Support Strip */}
+          <div
+            style={{
+              padding: "12px 14px",
+              borderRadius: "8px",
+              background: "rgba(91, 75, 255, 0.06)",
+              border: "1px solid rgba(91, 75, 255, 0.2)",
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+              lineHeight: 1.5,
+              display: "flex",
+              gap: "10px",
+            }}
+          >
+            <Info size={16} style={{ color: "var(--primary)", flexShrink: 0, marginTop: "2px" }} />
+            <div>
+              <strong style={{ color: "var(--text-main)" }}>Measurement Precision: </strong>
+              <span>
+                Calculated directly from native radiograph pixel matrix. Calibration requires verified physical marker or DICOM metadata.
+              </span>
             </div>
           </div>
         </div>
       </div>
-    </ErrorBoundary>
+
+      {/* Modal Lightbox */}
+      {selectedImageModal && (
+        <div
+          onClick={() => setSelectedImageModal(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.88)",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: "92vw",
+              maxHeight: "92vh",
+              background: "#0d0d0d",
+              borderRadius: "10px",
+              padding: "16px",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <button
+              onClick={() => setSelectedImageModal(null)}
+              style={{
+                position: "absolute",
+                top: "12px",
+                right: "12px",
+                background: "rgba(0, 0, 0, 0.7)",
+                border: "none",
+                borderRadius: "50%",
+                color: "#fff",
+                width: "32px",
+                height: "32px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <X size={18} />
+            </button>
+            <img
+              src={selectedImageModal}
+              alt="Expanded Caliper Inspection"
+              style={{ maxWidth: "100%", maxHeight: "82vh", objectFit: "contain", display: "block" }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   );
 };

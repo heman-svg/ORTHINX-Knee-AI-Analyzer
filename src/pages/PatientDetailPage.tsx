@@ -7,136 +7,265 @@ import {
   Clock,
   Download,
   FileText,
-  Sparkles,
   ShieldCheck,
   AlertCircle,
   Activity,
   Layers,
   Ruler,
   CheckCircle2,
-  Crosshair,
   RefreshCw,
   ExternalLink,
+  Plus,
+  Sparkles,
 } from "lucide-react";
 import { AnimatedButton } from "../components/ui/AnimatedButton";
 import { scanApi, patientApi } from "../lib/api";
 import { useAnalysisStore } from "../store/analysisStore";
 
 export const PatientDetailPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
+  const { id, patientId } = useParams<{ id?: string; patientId?: string }>();
+  const effectiveId = patientId || id;
   const navigate = useNavigate();
   const store = useAnalysisStore();
 
   const [loading, setLoading] = useState(true);
-  const [caseData, setCaseData] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<"original" | "enhanced" | "measurements" | "segmentation">("measurements");
-  const [downloading, setDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [patientInfo, setPatientInfo] = useState<{
+    id: string;
+    patientCode: string;
+    name: string;
+    age: number;
+    sex: string;
+    doctorName?: string;
+    doctorSpecialization?: string;
+  } | null>(null);
+
+  const [cases, setCases] = useState<any[]>([]);
+  const [selectedCase, setSelectedCase] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useState<"measurements" | "segmentation" | "enhanced" | "original">("measurements");
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
-    const fetchPatientData = async () => {
+    const fetchPatientAndCases = async () => {
+      if (!effectiveId) return;
       setLoading(true);
       setErrorMessage(null);
+
       try {
-        // 1. First fetch all cases
-        const allCases = await scanApi.listAllCases();
-        let matched = allCases.find(
-          (c: any) =>
-            c.case_id === id ||
-            c.patient_code === id ||
-            c.patient_id === id ||
-            String(c.patient_id) === id
-        );
+        // 1. Fetch all cases
+        let allCases: any[] = [];
+        try {
+          allCases = await scanApi.listAllCases();
+        } catch (e) {
+          console.warn("Could not list all cases:", e);
+        }
 
-        // 2. If not found in allCases, try direct case fetch
-        if (!matched && id?.startsWith("case_")) {
-          try {
-            matched = await scanApi.getCase(id);
-          } catch {
-            // fallback
+        // 2. Fetch patient from backend if possible
+        let backendPat: any = null;
+        try {
+          const numId = parseInt(effectiveId, 10);
+          if (!isNaN(numId)) {
+            backendPat = await patientApi.get(numId);
+          }
+        } catch {
+          // fallback
+        }
+
+        // 3. Filter cases for this patient
+        const matchingCases = Array.isArray(allCases)
+          ? allCases.filter(
+              (c: any) =>
+                c.case_id === effectiveId ||
+                c.patient_code === effectiveId ||
+                c.patient_id === effectiveId ||
+                String(c.patient_id) === effectiveId
+            )
+          : [];
+
+        // 4. Check if current active store matches
+        if (matchingCases.length === 0 && store.activeCase?.analysisResult) {
+          const activeRes = store.activeCase.analysisResult;
+          if (
+            activeRes.case_id === effectiveId ||
+            store.patientInfo.patientId === effectiveId
+          ) {
+            matchingCases.push(activeRes);
           }
         }
 
-        // 3. If still not matched, check active store
-        if (!matched) {
-          const frontScan = store.views.front.scanResult;
-          if (frontScan && (frontScan.case_id === id || frontScan.patient_code === id)) {
-            matched = frontScan;
-          }
+        // Determine patient info
+        let patCode = effectiveId;
+        let patName = `Patient ${effectiveId}`;
+        let patAge = 0;
+        let patSex = "Unknown";
+        let docName = "Dr. Alex Morgan, MD";
+        let docSpec = "Musculoskeletal Orthopedics";
+
+        if (backendPat) {
+          patCode = backendPat.patient_code || String(backendPat.id);
+          patName = backendPat.name || patName;
+          patAge = backendPat.age || 0;
+          patSex = backendPat.sex === "M" || backendPat.sex === "m" ? "Male" : backendPat.sex === "F" || backendPat.sex === "f" ? "Female" : "Other";
+        } else if (matchingCases.length > 0) {
+          const first = matchingCases[0];
+          patCode = first.patient_code || first.patient_id || effectiveId;
+          patName = first.patient_name || store.patientInfo.patientName || patName;
+          patAge = first.patient_age || store.patientInfo.patientAge || 0;
+          patSex = first.patient_sex || store.patientInfo.patientSex || patSex;
+          if (first.doctor_name) docName = first.doctor_name;
+          if (first.doctor_specialization) docSpec = first.doctor_specialization;
+        } else if (store.patientInfo.patientId === effectiveId) {
+          patCode = store.patientInfo.patientId;
+          patName = store.patientInfo.patientName || patName;
+          patAge = store.patientInfo.patientAge || 0;
+          patSex = store.patientInfo.patientSex || patSex;
         }
 
-        if (matched) {
-          setCaseData(matched);
-        } else {
-          setErrorMessage(`No case or patient record found with ID "${id}".`);
+        setPatientInfo({
+          id: String(backendPat?.id || effectiveId),
+          patientCode: patCode,
+          name: patName,
+          age: patAge,
+          sex: patSex,
+          doctorName: docName,
+          doctorSpecialization: docSpec,
+        });
+
+        setCases(matchingCases);
+        if (matchingCases.length > 0) {
+          setSelectedCase(matchingCases[0]);
         }
       } catch (err: any) {
-        console.error("Error fetching patient detail:", err);
-        setErrorMessage(err?.message || "Failed to load patient record from database.");
+        console.error("Error fetching patient details:", err);
+        setErrorMessage(err?.message || "Unable to load patient data.");
       } finally {
         setLoading(false);
       }
     };
 
-    if (id) {
-      fetchPatientData();
+    fetchPatientAndCases();
+  }, [effectiveId, store.activeCase, store.patientInfo]);
+
+  const handleStartNewAnalysis = () => {
+    store.startNewAnalysis();
+    if (patientInfo) {
+      store.setPatientInfo({
+        patientId: patientInfo.patientCode,
+        patientName: patientInfo.name,
+        patientAge: patientInfo.age,
+        patientSex: patientInfo.sex,
+      });
     }
-  }, [id, store.views.front.scanResult]);
+    navigate("/analysis/upload");
+  };
+
+  const handleLoadCaseIntoAnalysis = (c: any) => {
+    store.setScanResult(c, (c.view as any) || "front");
+    if (patientInfo) {
+      store.setPatientInfo({
+        patientId: patientInfo.patientCode,
+        patientName: patientInfo.name,
+        patientAge: patientInfo.age,
+        patientSex: patientInfo.sex,
+      });
+    }
+    navigate("/analysis/results");
+  };
+
+  const handleDownloadPdf = async (targetCase: any) => {
+    if (!targetCase) return;
+    setDownloading(true);
+    try {
+      const patCode = patientInfo?.patientCode || "Patient";
+      const filename = `ORTHINX_Report_${patCode}_${targetCase.case_id || "Case"}.pdf`;
+      if (targetCase.case_id) {
+        await scanApi.downloadCasePdf(targetCase.case_id, filename);
+      } else {
+        await scanApi.generatePdfFromPayload(targetCase, filename);
+      }
+    } catch (err) {
+      console.error("PDF download error:", err);
+      alert("Failed to download PDF report. Ensure backend service is reachable.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (loading) {
     return (
-      <div style={{ textAlign: "center", padding: "100px 0" }}>
-        <RefreshCw size={36} className="spin" color="var(--primary)" />
-        <p style={{ color: "var(--text-muted)", marginTop: "16px", fontSize: "15px" }}>
-          Loading patient record and diagnostic telemetry...
-        </p>
+      <div style={{ maxWidth: "1200px", margin: "60px auto", textAlign: "center" }}>
+        <div className="card" style={{ padding: "60px 40px" }}>
+          <RefreshCw
+            size={36}
+            className="spin"
+            style={{ margin: "0 auto 16px", color: "var(--primary)" }}
+          />
+          <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "6px" }}>
+            Loading Patient Record...
+          </h2>
+          <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
+            Querying clinical archives for ID: {effectiveId}
+          </p>
+        </div>
       </div>
     );
   }
 
-  if (errorMessage || !caseData) {
+  if (errorMessage || !patientInfo) {
     return (
-      <div className="card" style={{ maxWidth: "600px", margin: "40px auto", textAlign: "center", padding: "40px" }}>
-        <AlertCircle size={48} color="#ef4444" style={{ margin: "0 auto 16px" }} />
-        <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-          Patient Record Not Found
-        </h2>
-        <p style={{ fontSize: "14px", color: "var(--text-muted)", marginBottom: "24px" }}>
-          {errorMessage || "The requested patient record could not be found."}
-        </p>
-        <button className="btn btn-secondary" onClick={() => navigate("/patients")}>
-          <ArrowLeft size={16} /> Back to Patient Records
-        </button>
+      <div style={{ maxWidth: "1200px", margin: "60px auto" }}>
+        <div className="card" style={{ padding: "48px 36px", textAlign: "center", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
+          <div
+            style={{
+              width: "56px",
+              height: "56px",
+              borderRadius: "50%",
+              background: "rgba(239, 68, 68, 0.1)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 16px",
+              color: "#ef4444",
+            }}
+          >
+            <AlertCircle size={28} />
+          </div>
+          <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
+            Unable to Load Patient Data
+          </h2>
+          <p style={{ fontSize: "14px", color: "var(--text-muted)", maxWidth: "480px", margin: "0 auto 24px" }}>
+            {errorMessage || `No clinical records found for Patient ID: '${effectiveId}'.`}
+          </p>
+          <div style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate("/patients")}>
+              <ArrowLeft size={14} /> Back to Patient Directory
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => navigate("/analysis/upload")}>
+              Analyze New Radiograph
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
-  const m = caseData.measurements || {};
-  const calib = caseData.calibration || {};
-  const unit = calib.unit === "mm" ? "mm" : "px";
-  const isCalibrated = Boolean(calib.available && calib.unit === "mm");
+  // Selected case derived data
+  const m = selectedCase?.measurements || {};
+  const isCalibrated = Boolean(selectedCase?.calibration?.available && selectedCase?.calibration?.unit === "mm");
+  const unit = isCalibrated ? "mm" : "px";
 
-  const patCode = caseData.patient_code || caseData.patient_id || id;
-  const patName = caseData.patient_name || `Patient ${patCode}`;
-  const patAge = caseData.patient_age || 58;
-  const patSex = caseData.patient_sex || "Female";
-  const doctorName = caseData.doctor_name || "Dr. Alex Morgan, MD";
-  const doctorSpec = caseData.doctor_specialization || "Orthopedic Surgeon";
-  const studyDate = caseData.formatted_date || (caseData.timestamp ? new Date(caseData.timestamp).toLocaleString() : new Date().toLocaleString());
+  const femW = m.femoral_width?.value !== undefined && m.femoral_width?.value !== null ? `${m.femoral_width.value} ${m.femoral_width.unit || unit}` : "Not measurable on this view";
+  const femAP = m.femoral_ap?.value !== undefined && m.femoral_ap?.value !== null ? `${m.femoral_ap.value} ${m.femoral_ap.unit || unit}` : "Requires lateral radiograph";
+  const tibW = m.tibial_width?.value !== undefined && m.tibial_width?.value !== null ? `${m.tibial_width.value} ${m.tibial_width.unit || unit}` : "Not measurable on this view";
+  const tibAP = m.tibial_ap?.value !== undefined && m.tibial_ap?.value !== null ? `${m.tibial_ap.value} ${m.tibial_ap.unit || unit}` : "Requires lateral radiograph";
+  const medJSW = m.medial_jsw?.value !== undefined && m.medial_jsw?.value !== null ? `${m.medial_jsw.value} ${m.medial_jsw.unit || unit}` : "Not measurable on this view";
+  const latJSW = m.lateral_jsw?.value !== undefined && m.lateral_jsw?.value !== null ? `${m.lateral_jsw.value} ${m.lateral_jsw.unit || unit}` : "Not measurable on this view";
+  const minJSW = m.min_jsw?.value !== undefined && m.min_jsw?.value !== null ? `${m.min_jsw.value} ${m.min_jsw.unit || unit}` : "Not measurable on this view";
 
-  const femW = m.femoral_width?.value !== undefined ? `${m.femoral_width.value} ${m.femoral_width.unit || unit}` : "Not available";
-  const femAP = m.femoral_ap?.value !== undefined ? `${m.femoral_ap.value} ${m.femoral_ap.unit || unit}` : "Requires lateral radiograph";
-  const tibW = m.tibial_width?.value !== undefined ? `${m.tibial_width.value} ${m.tibial_width.unit || unit}` : "Not available";
-  const tibAP = m.tibial_ap?.value !== undefined ? `${m.tibial_ap.value} ${m.tibial_ap.unit || unit}` : "Requires lateral radiograph";
-  const medJSW = m.medial_jsw?.value !== undefined ? `${m.medial_jsw.value} ${m.medial_jsw.unit || unit}` : "Not available";
-  const latJSW = m.lateral_jsw?.value !== undefined ? `${m.lateral_jsw.value} ${m.lateral_jsw.unit || unit}` : "Not available";
-  const minJSW = m.min_jsw?.value !== undefined ? `${m.min_jsw.value} ${m.min_jsw.unit || unit}` : "Not available";
-  const jointArea = m.joint_space_area?.value !== undefined ? `${m.joint_space_area.value} ${m.joint_space_area.unit || unit + "²"}` : "Not available";
-
-  const origImg = caseData.image?.original || "";
-  const enhImg = caseData.image?.enhanced || origImg;
-  const measImg = caseData.image?.measurements || caseData.image?.overlay || origImg;
-  const maskImg = caseData.image?.segmentation || caseData.image?.mask || origImg;
+  const origImg = selectedCase?.image?.original || selectedCase?.original_image_url || "";
+  const enhImg = selectedCase?.image?.enhanced || selectedCase?.segmentation?.enhanced_url || origImg;
+  const measImg = selectedCase?.image?.measurements || selectedCase?.image?.overlay || selectedCase?.segmentation?.measurements_url || origImg;
+  const maskImg = selectedCase?.image?.segmentation || selectedCase?.segmentation?.mask_url || origImg;
 
   const currentTabUrl =
     activeTab === "original"
@@ -147,30 +276,9 @@ export const PatientDetailPage: React.FC = () => {
       ? measImg
       : maskImg;
 
-  const handleDownloadPdf = async () => {
-    setDownloading(true);
-    try {
-      if (caseData.case_id) {
-        await scanApi.downloadCasePdf(caseData.case_id, `ORTHINX_Report_${patCode}.pdf`);
-      } else {
-        await scanApi.generatePdfFromPayload(caseData, `ORTHINX_Report_${patCode}.pdf`);
-      }
-    } catch (err) {
-      console.error("PDF download error:", err);
-      alert("Failed to download PDF report. Ensure backend is running.");
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  const handleOpenInKneeAnalysis = () => {
-    store.setScanResult(caseData, (caseData.view as any) || "front");
-    navigate("/knee-analysis");
-  };
-
   return (
     <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "8px 0" }}>
-      {/* Top Back & Actions Navigation */}
+      {/* Top Navigation */}
       <div
         style={{
           display: "flex",
@@ -186,62 +294,57 @@ export const PatientDetailPage: React.FC = () => {
           onClick={() => navigate("/patients")}
           style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
         >
-          <ArrowLeft size={15} /> Back to Patient Records
+          <ArrowLeft size={15} /> Back to Patient Directory
         </button>
 
         <div style={{ display: "flex", gap: "10px" }}>
-          <button className="btn btn-secondary btn-sm" onClick={handleOpenInKneeAnalysis}>
-            <ExternalLink size={14} /> Open in Knee Analysis
-          </button>
           <AnimatedButton
             variant="primary"
-            icon={<Download size={15} />}
-            onClick={handleDownloadPdf}
-            disabled={downloading}
+            icon={<Plus size={15} />}
+            onClick={handleStartNewAnalysis}
+            style={{ padding: "8px 18px", fontSize: "13px" }}
           >
-            {downloading ? "Generating PDF..." : "Download Official PDF"}
+            Start New Analysis
           </AnimatedButton>
         </div>
       </div>
 
-      {/* Patient Information Banner Card */}
+      {/* Patient Header Card */}
       <div className="card" style={{ padding: "24px", marginBottom: "24px", border: "1px solid var(--border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
           <div>
             <div style={{ fontSize: "11px", fontWeight: 800, color: "var(--primary)", letterSpacing: "1.5px" }}>
               PATIENT CLINICAL RECORD
             </div>
-            <h1 style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-main)", marginTop: "4px" }}>
-              {patName}
+            <h1 style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-main)", marginTop: "4px" }}>
+              {patientInfo.name}
             </h1>
             <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "2px" }}>
-              Patient ID: <b style={{ color: "var(--primary)" }}>{patCode}</b> · Case ID: <b>{caseData.case_id}</b>
+              Patient ID: <b style={{ color: "var(--primary)" }}>{patientInfo.patientCode}</b>
             </div>
           </div>
 
           <div style={{ display: "flex", gap: "8px" }}>
-            <span className="badge badge-success" style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "6px 12px" }}>
-              <CheckCircle2 size={13} /> {caseData.analysis?.status || "SUCCESS"}
-            </span>
             <span
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "5px",
-                padding: "6px 12px",
+                padding: "6px 14px",
                 borderRadius: "6px",
                 fontSize: "12px",
                 fontWeight: 700,
-                background: isCalibrated ? "rgba(34, 197, 94, 0.15)" : "rgba(234, 179, 8, 0.15)",
-                color: isCalibrated ? "#22c55e" : "#eab308",
+                background: "rgba(124, 58, 237, 0.15)",
+                color: "var(--primary)",
+                border: "1px solid rgba(124, 58, 237, 0.3)",
               }}
             >
-              {isCalibrated ? "Calibrated (mm)" : "Pixel Scale (px)"}
+              <Activity size={13} /> {cases.length} Total {cases.length === 1 ? "Study" : "Studies"}
             </span>
           </div>
         </div>
 
-        {/* Info Grid */}
+        {/* Patient Demographics Grid */}
         <div
           style={{
             display: "grid",
@@ -255,258 +358,369 @@ export const PatientDetailPage: React.FC = () => {
           <div>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Age & Sex</div>
             <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-              {patAge} yrs / {patSex}
+              {patientInfo.age > 0 ? `${patientInfo.age} yrs` : "—"} / {patientInfo.sex}
             </div>
           </div>
-          <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Study Date & Time</div>
-            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-              {studyDate}
-            </div>
-          </div>
+
           <div>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Attending Specialist</div>
             <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-              {doctorName}
+              {patientInfo.doctorName || "Dr. Alex Morgan, MD"}
             </div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{doctorSpec}</div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              {patientInfo.doctorSpecialization || "Musculoskeletal Orthopedics"}
+            </div>
           </div>
+
           <div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Projection View</div>
-            <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--primary)", marginTop: "2px" }}>
-              {String(caseData.view || "front").toUpperCase()}
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Primary Indication</div>
+            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
+              Knee Radiograph Morphometry
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Case History Status</div>
+            <div style={{ fontSize: "14px", fontWeight: 600, color: cases.length > 0 ? "#22c55e" : "var(--text-muted)", marginTop: "2px" }}>
+              {cases.length > 0 ? `${cases.length} Completed Analysis` : "No Radiographs Analyzed"}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Grid: Left = X-Ray Viewport, Right = Measurements & Findings */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "24px", alignItems: "start" }}>
-        {/* Left Column: Image Viewport */}
-        <div className="card" style={{ padding: "20px" }}>
-          {/* Image Tabs Bar */}
-          <div
-            style={{
-              display: "flex",
-              gap: "4px",
-              background: "var(--bg-card, #1e1b4b)",
-              padding: "4px",
-              borderRadius: "8px",
-              border: "1px solid var(--border)",
-              marginBottom: "14px",
-            }}
-          >
-            {(
-              [
-                { id: "measurements", label: "Measurements" },
-                { id: "segmentation", label: "Segmentation Mask" },
-                { id: "enhanced", label: "Enhanced" },
-                { id: "original", label: "Original" },
-              ] as const
-            ).map((tab) => {
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+      {/* Analysis History Section */}
+      <div className="card" style={{ padding: "20px", marginBottom: "24px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+          <h2 className="card-title" style={{ fontSize: "16px", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+            <Activity size={17} color="var(--primary)" />
+            <span>Analysis History ({cases.length})</span>
+          </h2>
+          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+            Select a case to view radiograph and derived measurements
+          </span>
+        </div>
+
+        {cases.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 20px", background: "var(--bg-app)", borderRadius: "8px", border: "1px dashed var(--border)" }}>
+            <FileText size={36} color="var(--text-muted)" style={{ margin: "0 auto 10px", opacity: 0.4 }} />
+            <p style={{ fontSize: "14px", color: "var(--text-muted)", margin: "0 0 16px" }}>
+              No analysis cases recorded for this patient yet.
+            </p>
+            <AnimatedButton variant="primary" icon={<Plus size={14} />} onClick={handleStartNewAnalysis}>
+              Upload & Analyze X-Ray
+            </AnimatedButton>
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table" style={{ width: "100%", margin: 0 }}>
+              <thead>
+                <tr>
+                  <th>Case ID</th>
+                  <th>Study Date / Time</th>
+                  <th>View</th>
+                  <th>AI Severity Grade</th>
+                  <th>Analysis Status</th>
+                  <th>Report Availability</th>
+                  <th style={{ textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cases.map((c) => {
+                  const isSelected = selectedCase?.case_id === c.case_id;
+                  const dateStr = c.formatted_date || (c.timestamp ? new Date(c.timestamp).toLocaleString() : "—");
+                  return (
+                    <tr
+                      key={c.case_id}
+                      style={{
+                        background: isSelected ? "rgba(124, 58, 237, 0.08)" : undefined,
+                        cursor: "pointer",
+                      }}
+                      onClick={() => setSelectedCase(c)}
+                    >
+                      <td style={{ fontWeight: 700, color: "var(--primary)", fontSize: "13px" }}>
+                        {c.case_id}
+                      </td>
+                      <td style={{ fontSize: "13px" }}>{dateStr}</td>
+                      <td style={{ fontSize: "13px", fontWeight: 600 }}>{String(c.view || "front").toUpperCase()}</td>
+                      <td>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                            padding: "3px 8px",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            background: "rgba(91, 75, 255, 0.12)",
+                            color: "var(--primary)",
+                            border: "1px solid rgba(91, 75, 255, 0.25)",
+                          }}
+                        >
+                          <Sparkles size={11} />
+                          {c.classification?.class_name || "Mild"}
+                          {c.classification?.confidence ? ` (${(c.classification.confidence * 100).toFixed(0)}%)` : ""}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="badge badge-success" style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <CheckCircle2 size={11} /> {c.analysis?.status || "SUCCESS"}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                          PDF Ready
+                        </span>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <div style={{ display: "inline-flex", gap: "6px" }} onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: "4px 10px", fontSize: "12px" }}
+                            onClick={() => handleLoadCaseIntoAnalysis(c)}
+                            title="Open in Analysis Results view"
+                          >
+                            <ExternalLink size={12} /> View Analysis
+                          </button>
+                          <button
+                            className="btn btn-outline btn-sm"
+                            style={{ padding: "4px 10px", fontSize: "12px" }}
+                            onClick={() => handleDownloadPdf(c)}
+                            disabled={downloading}
+                            title="Download PDF report for this case"
+                          >
+                            <Download size={12} /> PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Selected Historical Case Detail (Patient / Case Separation) */}
+      {selectedCase && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "24px", alignItems: "start" }}>
+          {/* Left Column: Image Viewport */}
+          <div className="card" style={{ padding: "20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <h3 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-main)", margin: 0 }}>
+                Radiograph Artifacts: {selectedCase.case_id}
+              </h3>
+              <span className="badge badge-info" style={{ fontSize: "11px" }}>
+                {String(selectedCase.view || "front").toUpperCase()} Projection
+              </span>
+            </div>
+
+            {/* Image View Selector Tabs */}
+            <div
+              style={{
+                display: "flex",
+                gap: "4px",
+                background: "var(--bg-app)",
+                padding: "4px",
+                borderRadius: "8px",
+                border: "1px solid var(--border)",
+                marginBottom: "14px",
+              }}
+            >
+              {(
+                [
+                  { id: "measurements", label: "Measurements" },
+                  { id: "segmentation", label: "Segmentation Mask" },
+                  { id: "enhanced", label: "Enhanced" },
+                  { id: "original", label: "Original" },
+                ] as const
+              ).map((tab) => {
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    style={{
+                      flex: 1,
+                      border: "none",
+                      padding: "8px 10px",
+                      fontSize: "12px",
+                      fontWeight: isActive ? 700 : 500,
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      background: isActive ? "var(--primary)" : "transparent",
+                      color: isActive ? "#ffffff" : "var(--text-muted)",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Viewport Frame */}
+            <div
+              style={{
+                position: "relative",
+                width: "100%",
+                minHeight: "380px",
+                maxHeight: "520px",
+                borderRadius: "8px",
+                overflow: "hidden",
+                background: "#080c14",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid var(--border)",
+              }}
+            >
+              {currentTabUrl ? (
+                <img
+                  src={currentTabUrl}
+                  alt={`Case ${selectedCase.case_id} ${activeTab}`}
                   style={{
-                    flex: 1,
-                    border: "none",
-                    padding: "8px 10px",
-                    fontSize: "12px",
-                    fontWeight: isActive ? 700 : 500,
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    background: isActive ? "var(--primary)" : "transparent",
-                    color: isActive ? "#ffffff" : "var(--text-main)",
-                    boxShadow: isActive ? "0 2px 8px rgba(99, 102, 241, 0.35)" : "none",
-                    transition: "all 0.15s ease",
+                    maxWidth: "100%",
+                    maxHeight: "500px",
+                    objectFit: "contain",
+                    display: "block",
+                  }}
+                />
+              ) : (
+                <div style={{ textAlign: "center", color: "var(--text-muted)", padding: "40px" }}>
+                  <FileText size={36} style={{ margin: "0 auto 10px", opacity: 0.5 }} />
+                  <p style={{ margin: 0, fontSize: "13px" }}>Image not available for this tab view</p>
+                </div>
+              )}
+
+              <div
+                style={{
+                  position: "absolute",
+                  top: "12px",
+                  left: "12px",
+                  background: "rgba(0,0,0,0.75)",
+                  color: "#ffffff",
+                  padding: "4px 10px",
+                  borderRadius: "4px",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                }}
+              >
+                {activeTab} VIEW
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Measurements & Assessment */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+            {/* Morphometric Measurements Table */}
+            <div className="card" style={{ padding: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                <h3 className="card-title" style={{ fontSize: "15px", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Ruler size={17} color="var(--primary)" />
+                  <span>Quantitative Anatomical Metrics</span>
+                </h3>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    padding: "3px 8px",
+                    borderRadius: "4px",
+                    background: isCalibrated ? "rgba(34, 197, 94, 0.15)" : "rgba(234, 179, 8, 0.15)",
+                    color: isCalibrated ? "#22c55e" : "#eab308",
                   }}
                 >
-                  {tab.label}
+                  {isCalibrated ? "Calibrated (mm)" : "Pixel Scale (px)"}
+                </span>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Femoral Width</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Mediolateral distal condylar span</div>
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-main)" }}>{femW}</div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Femoral AP</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Condylar depth dimension</div>
+                  </div>
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: femAP.includes("lateral") ? "var(--warning)" : "var(--text-main)" }}>
+                    {femAP}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Tibial Width</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Proximal tibial plateau span</div>
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-main)" }}>{tibW}</div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Tibial AP</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Plateau depth dimension</div>
+                  </div>
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: tibAP.includes("lateral") ? "var(--warning)" : "var(--text-main)" }}>
+                    {tibAP}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Medial JSW</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Medial compartment clearance</div>
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--primary)" }}>{medJSW}</div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Lateral JSW</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Lateral compartment clearance</div>
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--primary)" }}>{latJSW}</div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Minimum JSW</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Focal narrowest clearance point</div>
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#eab308" }}>{minJSW}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions Panel */}
+            <div className="card" style={{ padding: "20px" }}>
+              <h3 style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)", marginBottom: "12px" }}>
+                Case Actions
+              </h3>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                <button className="btn btn-secondary btn-sm" onClick={() => handleLoadCaseIntoAnalysis(selectedCase)}>
+                  <ExternalLink size={14} /> Open Full Workflow
                 </button>
-              );
-            })}
-          </div>
-
-          {/* Viewport */}
-          <div
-            style={{
-              position: "relative",
-              width: "100%",
-              minHeight: "420px",
-              maxHeight: "560px",
-              borderRadius: "8px",
-              overflow: "hidden",
-              background: "#080c14",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "1px solid var(--border)",
-            }}
-          >
-            {currentTabUrl ? (
-              <img
-                src={currentTabUrl}
-                alt="Patient X-ray view"
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: "540px",
-                  objectFit: "contain",
-                  display: "block",
-                }}
-              />
-            ) : (
-              <div style={{ textAlign: "center", color: "var(--text-muted)", padding: "40px" }}>
-                <FileText size={36} style={{ margin: "0 auto 10px", opacity: 0.5 }} />
-                <p>Image not loaded</p>
-              </div>
-            )}
-
-            <div
-              style={{
-                position: "absolute",
-                top: "12px",
-                left: "12px",
-                background: "rgba(0,0,0,0.75)",
-                color: "#ffffff",
-                padding: "4px 10px",
-                borderRadius: "4px",
-                fontSize: "11px",
-                fontWeight: 700,
-                letterSpacing: "0.5px",
-                textTransform: "uppercase",
-              }}
-            >
-              {activeTab} VIEW
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Measurements & AI Telemetry */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-          {/* AI Clinical Assessment Card */}
-          <div className="card">
-            <h2 className="card-title" style={{ fontSize: "16px", marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
-              <Activity size={17} color="var(--primary)" />
-              <span>AI Knee Assessment</span>
-            </h2>
-
-            <div
-              style={{
-                padding: "14px",
-                background: "rgba(59, 130, 246, 0.08)",
-                border: "1px solid rgba(59, 130, 246, 0.25)",
-                borderRadius: "8px",
-                marginBottom: "16px",
-              }}
-            >
-              <div style={{ fontSize: "11px", fontWeight: 700, color: "#3b82f6", textTransform: "uppercase" }}>
-                Finding
-              </div>
-              <div style={{ fontSize: "13px", color: "var(--text-main)", marginTop: "4px", lineHeight: "1.5" }}>
-                {caseData.clinical_summary ||
-                  (m.medial_jsw?.value !== undefined && m.medial_jsw.value < 2.5
-                    ? "Severe joint space loss observed in medial compartment. Lateral compartment preserved."
-                    : "Preserved joint space clearance within physiological reference ranges.")}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", fontSize: "13px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "var(--bg-card)", borderRadius: "6px" }}>
-                <span style={{ color: "var(--text-muted)" }}>Abnormality Detected:</span>
-                <b style={{ color: m.medial_jsw?.value !== undefined && m.medial_jsw.value < 2.5 ? "#ef4444" : "#22c55e" }}>
-                  {m.medial_jsw?.value !== undefined && m.medial_jsw.value < 2.5 ? "Yes (Narrowing)" : "No Significant Loss"}
-                </b>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "var(--bg-card)", borderRadius: "6px" }}>
-                <span style={{ color: "var(--text-muted)" }}>AI Quality Score:</span>
-                <b style={{ color: "#22c55e" }}>
-                  {caseData.analysis?.quality_score ?? caseData.quality_control?.quality_score ?? 91.5}%
-                </b>
-              </div>
-            </div>
-          </div>
-
-          {/* Quantitative Anatomical Measurements Table */}
-          <div className="card">
-            <h2 className="card-title" style={{ fontSize: "16px", marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
-              <Ruler size={17} color="var(--primary)" />
-              <span>Image-Derived Quantitative Measurements</span>
-            </h2>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Femoral Mediolateral Width</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Distal condylar span (Front AP)</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>{femW}</div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Femoral Anteroposterior (AP)</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Condylar depth (Lateral radiograph)</div>
-                </div>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: femAP.includes("lateral") ? "var(--warning)" : "var(--text-main)" }}>
-                  {femAP}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Tibial Plateau Width</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Proximal articular width (Front AP)</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>{tibW}</div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Tibial Anteroposterior (AP)</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Plateau depth (Lateral radiograph)</div>
-                </div>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: tibAP.includes("lateral") ? "var(--warning)" : "var(--text-main)" }}>
-                  {tibAP}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Medial Joint Space Width (JSW)</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Medial load-bearing clearance</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--primary)" }}>{medJSW}</div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Lateral Joint Space Width (JSW)</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Lateral compartment clearance</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--primary)" }}>{latJSW}</div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Minimum JSW (Focal Clearance)</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Narrowest point across articulation</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "#eab308" }}>{minJSW}</div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>Articular Clearance Area</div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Segmented 2D envelope</div>
-                </div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)" }}>{jointArea}</div>
+                <AnimatedButton
+                  variant="primary"
+                  icon={<Download size={14} />}
+                  onClick={() => handleDownloadPdf(selectedCase)}
+                  disabled={downloading}
+                >
+                  {downloading ? "Generating PDF..." : "Download PDF Report"}
+                </AnimatedButton>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

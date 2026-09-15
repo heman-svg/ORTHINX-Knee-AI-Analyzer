@@ -1,0 +1,6 @@
+class_name,class_id,precision,recall,f1_score,support
+Normal,0,0.8309,0.7386,0.782,153
+Doubtful,1,0.5761,0.7413,0.6483,143
+Mild,2,0.44,0.3235,0.3729,68
+Moderate,3,0.7333,0.6667,0.6984,66
+Severe,4,0.7742,0.7742,0.7742,62

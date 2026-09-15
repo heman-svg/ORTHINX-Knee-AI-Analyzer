@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment variables & secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files, scratch, IDE & caches
+scratch/
+tmp/
+temp/
+.vite/
+.cache/
+.DS_Store
+Thumbs.db
+*.log
+
+# Generated user runtime data (preserving directory structure)
+knee ai analyzer/knee ai analyzer/data/uploads/*
+!knee ai analyzer/knee ai analyzer/data/uploads/.gitkeep
+knee ai analyzer/knee ai analyzer/data/processed/*
+!knee ai analyzer/knee ai analyzer/data/processed/.gitkeep
+knee ai analyzer/knee ai analyzer/data/results/cases/*
+!knee ai analyzer/knee ai analyzer/data/results/cases/.gitkeep
+knee ai analyzer/knee ai analyzer/data/results/reports/*
+!knee ai analyzer/knee ai analyzer/data/results/reports/.gitkeep
+knee ai analyzer/knee ai analyzer/data/results/single_analysis/*
+!knee ai analyzer/knee ai analyzer/data/results/single_analysis/.gitkeep
+knee ai analyzer/knee ai analyzer/data/audit_visualizations/*
+!knee ai analyzer/knee ai analyzer/data/audit_visualizations/.gitkeep

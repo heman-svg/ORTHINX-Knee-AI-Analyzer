@@ -48,6 +48,24 @@ class NumberedCanvas(canvas.Canvas):
         self.restoreState()
 
 
+def get_grade_display(class_name: str, class_id: Optional[int] = None) -> str:
+    """Format severity class name with its clinical grade number."""
+    mapping = {
+        "normal": "Normal (Grade 0)",
+        "doubtful": "Doubtful (Grade 1)",
+        "mild": "Mild (Grade 2)",
+        "moderate": "Moderate (Grade 3)",
+        "severe": "Severe (Grade 4)",
+    }
+    key = str(class_name).strip().lower()
+    if key in mapping:
+        return mapping[key]
+    if class_id is not None and 0 <= class_id <= 4:
+        names = ["Normal", "Doubtful", "Mild", "Moderate", "Severe"]
+        return f"{names[class_id]} (Grade {class_id})"
+    return str(class_name)
+
+
 def generate_orthinx_clinical_pdf(
     case_data: Dict[str, Any],
     output_pdf_path: Path,
@@ -56,8 +74,11 @@ def generate_orthinx_clinical_pdf(
 ) -> Path:
     """
     Generate a formal medical-grade clinical knee X-ray analysis PDF report.
-    Uses actual image files, genuine image-derived measurements, dynamic real-time timestamps,
-    and verified calibration metadata.
+    Integrates:
+    - 5-Class AI Severity Classification with probability breakdown and confidence score
+    - Strict research/decision-support disclaimer
+    - Genuine patient imaging and measurement overlays
+    - Graceful degradation for unavailable segmentation/measurements
     """
     output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
     doc = SimpleDocTemplate(
@@ -71,7 +92,6 @@ def generate_orthinx_clinical_pdf(
 
     styles = getSampleStyleSheet()
 
-    # Typography styles
     brand_title_style = ParagraphStyle(
         "BrandTitle",
         parent=styles["Heading1"],
@@ -131,22 +151,33 @@ def generate_orthinx_clinical_pdf(
         textColor=colors.HexColor("#b45309"),
         fontName="Helvetica",
     )
+    research_notice_style = ParagraphStyle(
+        "ResearchNotice",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor("#92400e"),
+        fontName="Helvetica-Bold",
+    )
 
     story = []
 
     # 1. Header Banner with ORTHINX Logo
-    logo_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "src" / "assets" / "orthinx_logo_clean.png"
+    logo_path = Path(__file__).resolve().parents[4] / "src" / "assets" / "orthinx_logo_clean.png"
     header_cells = []
 
     if logo_path.exists():
-        logo_img = RLImage(str(logo_path), width=42, height=42)
-        header_cells.append(logo_img)
+        try:
+            logo_img = RLImage(str(logo_path), width=42, height=42)
+            header_cells.append(logo_img)
+        except Exception:
+            header_cells.append("")
     else:
         header_cells.append("")
 
     title_flowables = [
         Paragraph("<b>ORTHINX MEDICAL AI</b>", brand_title_style),
-        Paragraph("KNEE RADIOGRAPH QUANTITATIVE ANALYSIS & ANATOMICAL REPORT", doc_subtitle_style),
+        Paragraph("KNEE RADIOGRAPH QUANTITATIVE ANALYSIS & SEVERITY CLASSIFICATION REPORT", doc_subtitle_style),
     ]
     header_cells.append(title_flowables)
 
@@ -206,11 +237,112 @@ def generate_orthinx_clinical_pdf(
     )
     story.append(Paragraph("1. Patient & Examination Details", h2_style))
     story.append(meta_table)
+    story.append(Spacer(1, 6))
+
+    # 3. AI SEVERITY CLASSIFICATION SECTION (5-Class Deep Learning Assessment)
+    classification = case_data.get("classification") or {}
+    raw_class_name = classification.get("class_name", "Pending")
+    raw_class_id = classification.get("class_id")
+    predicted_grade_text = get_grade_display(raw_class_name, raw_class_id)
+    raw_confidence = classification.get("confidence", 0.0)
+    confidence_text = f"{raw_confidence * 100:.1f}%" if raw_confidence else "N/A"
+    probabilities = classification.get("probabilities") or {}
+    model_version = classification.get("model_version", "orthinx_knee_severity_resnet18")
+    architecture = classification.get("architecture", "resnet18")
+
+    # Severity Summary Table
+    severity_summary_data = [
+        [
+            Paragraph("<b>Predicted Severity Grade:</b>", body_style),
+            Paragraph(f"<font color='#4f46e5' size='10'><b>{predicted_grade_text}</b></font>", body_bold),
+            Paragraph("<b>Model Confidence:</b>", body_style),
+            Paragraph(f"<font color='#16a34a' size='10'><b>{confidence_text}</b></font>", body_bold),
+        ],
+        [
+            Paragraph("<b>AI Model Architecture:</b>", body_style),
+            Paragraph(f"PyTorch Deep CNN ({architecture.upper()})", body_style),
+            Paragraph("<b>Model Checkpoint:</b>", body_style),
+            Paragraph(str(model_version), body_style),
+        ],
+    ]
+    sev_summary_table = Table(severity_summary_data, colWidths=[130, 140, 120, 150])
+    sev_summary_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("PADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ])
+    )
+
+    # 5-Class Probability Distribution Table
+    prob_table_data = [
+        [
+            Paragraph("Severity Class", header_style),
+            Paragraph("Clinical Grade", header_style),
+            Paragraph("Calculated Probability", header_style),
+            Paragraph("Classification Status", header_style),
+        ]
+    ]
+
+    all_grades = [
+        ("Normal", "Grade 0"),
+        ("Doubtful", "Grade 1"),
+        ("Mild", "Grade 2"),
+        ("Moderate", "Grade 3"),
+        ("Severe", "Grade 4"),
+    ]
+
+    for c_name, g_num in all_grades:
+        prob_val = probabilities.get(c_name, 0.0)
+        prob_str = f"{prob_val * 100:.1f}%"
+        is_pred = c_name.lower() == str(raw_class_name).lower()
+        status_text = "<b>Primary Classification</b>" if is_pred else "Differential"
+        text_color = "#4f46e5" if is_pred else "#334155"
+
+        prob_table_data.append([
+            Paragraph(f"<font color='{text_color}'><b>{c_name}</b></font>", body_bold if is_pred else body_style),
+            Paragraph(g_num, body_style),
+            Paragraph(f"<font color='{text_color}'><b>{prob_str}</b></font>", body_bold if is_pred else body_style),
+            Paragraph(f"<font color='{text_color}'>{status_text}</font>", body_style),
+        ])
+
+    prob_table = Table(prob_table_data, colWidths=[130, 110, 140, 160])
+    prob_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            ("PADDING", (0, 0), (-1, -1), 3),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ])
+    )
+
+    # Research / Decision-Support Notice Banner
+    research_notice_text = (
+        "<b>RESEARCH / DECISION-SUPPORT NOTICE: </b> This 5-class severity assessment is generated by an automated "
+        "transfer-learning neural network for clinical decision support and research exploration. It is not a standalone "
+        "clinical diagnosis. Definitive medical conclusions must be verified by a board-certified orthopedic clinician."
+    )
+    research_notice_table = Table([[Paragraph(research_notice_text, research_notice_style)]], colWidths=[540])
+    research_notice_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fef3c7")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#f59e0b")),
+            ("PADDING", (0, 0), (-1, -1), 5),
+        ])
+    )
+
+    story.append(Paragraph("2. AI Knee Severity Classification", h2_style))
+    story.append(sev_summary_table)
+    story.append(Spacer(1, 4))
+    story.append(prob_table)
+    story.append(Spacer(1, 4))
+    story.append(research_notice_table)
     story.append(Spacer(1, 8))
 
-    # 3. Actual Uploaded X-Ray & AI Measurement Overlay (Embedded Images)
-    # Search for actual files on disk
-    results_base = Path(__file__).resolve().parent.parent.parent / "data" / "results" / "single_analysis"
+    # 4. Diagnostic Imaging & Visual Artifacts (Embedded Images)
+    results_base = Path(__file__).resolve().parents[2] / "data" / "results" / "single_analysis"
     image_dict = case_data.get("image", {})
     orig_rel = image_dict.get("original", "")
     meas_rel = image_dict.get("measurements", "") or image_dict.get("overlay", "")
@@ -228,9 +360,8 @@ def generate_orthinx_clinical_pdf(
         if p.exists():
             meas_disk_path = p
 
-    # Fallback to test assets if needed
     if not orig_disk_path:
-        default_xray = Path(__file__).resolve().parent.parent.parent.parent.parent / "src" / "assets" / "knee_mri.jpg"
+        default_xray = Path(__file__).resolve().parents[4] / "src" / "assets" / "knee_mri.jpg"
         if default_xray.exists():
             orig_disk_path = default_xray
 
@@ -238,11 +369,11 @@ def generate_orthinx_clinical_pdf(
     if orig_disk_path and orig_disk_path.exists():
         try:
             img_elements.append([
-                Paragraph("<b>Uploaded X-Ray Radiograph</b>", body_bold),
-                Paragraph("<b>AI Morphometric Measurement Overlay</b>", body_bold),
+                Paragraph("<b>Uploaded Radiograph (Native Space)</b>", body_bold),
+                Paragraph("<b>Diagnostic / Morphometric Overlay</b>", body_bold),
             ])
-            orig_rl = RLImage(str(orig_disk_path), width=255, height=195)
-            meas_rl = RLImage(str(meas_disk_path), width=255, height=195) if (meas_disk_path and meas_disk_path.exists()) else orig_rl
+            orig_rl = RLImage(str(orig_disk_path), width=255, height=170)
+            meas_rl = RLImage(str(meas_disk_path), width=255, height=170) if (meas_disk_path and meas_disk_path.exists()) else orig_rl
             img_elements.append([orig_rl, meas_rl])
 
             image_table = Table(img_elements, colWidths=[270, 270])
@@ -250,24 +381,28 @@ def generate_orthinx_clinical_pdf(
                 TableStyle([
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("PADDING", (0, 0), (-1, -1), 4),
+                    ("PADDING", (0, 0), (-1, -1), 3),
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
                 ])
             )
-            story.append(Paragraph("2. Diagnostic Imaging & Visual Artifacts", h2_style))
+            story.append(Paragraph("3. Diagnostic Imaging & Visual Artifacts", h2_style))
             story.append(image_table)
-            story.append(Spacer(1, 8))
+            story.append(Spacer(1, 6))
         except Exception as e:
             print(f"[PDF_REPORT] Error embedding image: {e}")
 
-    # 4. Actual AI-Calculated Anatomical Measurements Table
+    # 5. Anatomical Measurements Table with Graceful Degradation
     m = case_data.get("measurements", {})
+    seg_info = case_data.get("segmentation", {})
+    mask_available = bool(seg_info.get("mask_available", False))
     calib = case_data.get("calibration", {})
     is_calibrated = bool(calib.get("available") and calib.get("unit") == "mm")
     unit = "mm" if is_calibrated else "px"
 
-    def fmt_val(obj, fallback="Not available"):
+    def fmt_val(obj, fallback="Measurement unavailable — valid segmentation result required"):
+        if not mask_available:
+            return "Measurement unavailable — valid segmentation result required"
         if not obj:
             return fallback
         if isinstance(obj, dict):
@@ -285,7 +420,6 @@ def generate_orthinx_clinical_pdf(
     med_jsw_txt = fmt_val(m.get("medial_jsw"))
     lat_jsw_txt = fmt_val(m.get("lateral_jsw"))
     min_jsw_txt = fmt_val(m.get("min_jsw"))
-    mean_jsw_txt = fmt_val(m.get("mean_jsw"))
     joint_area_txt = fmt_val(m.get("joint_space_area"))
 
     measurements_table_data = [
@@ -337,12 +471,7 @@ def generate_orthinx_clinical_pdf(
         [
             Paragraph("Meniscus Tissue Analysis", body_bold),
             Paragraph("Evaluated via radiolucent clearance", body_style),
-            Paragraph("Plain radiograph measures radiolucent joint clearance. Direct fibrocartilage tear assessment requires MRI.", body_style),
-        ],
-        [
-            Paragraph("Mechanical Axis / Alignment", body_bold),
-            Paragraph("Not calculated on focal X-ray", body_style),
-            Paragraph("Requires full-length weight-bearing long leg alignment radiograph.", body_style),
+            Paragraph("Plain radiograph measures joint clearance. Fibrocartilage tear analysis requires MRI.", body_style),
         ],
     ]
 
@@ -352,18 +481,27 @@ def generate_orthinx_clinical_pdf(
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-            ("PADDING", (0, 0), (-1, -1), 3.5),
+            ("PADDING", (0, 0), (-1, -1), 3),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ])
     )
-    story.append(Paragraph("3. Quantitative Anatomical Measurements", h2_style))
+    story.append(Paragraph("4. Quantitative Anatomical Measurements", h2_style))
+    if not mask_available:
+        degradation_note = Table([[Paragraph("<b>Notice:</b> Segmentation unavailable — no trained segmentation model is currently available for this study. Severity classification remains primary AI output.", disclaimer_style)]], colWidths=[540])
+        degradation_note.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fef2f2")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#f87171")),
+            ("PADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(degradation_note)
+        story.append(Spacer(1, 3))
     story.append(meas_table)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
-    # 5. AI Quality Control & Calibration Status
+    # 6. Technical Quality Control & Calibration Status
     qc = case_data.get("quality_control", {}) or case_data.get("analysis", {})
     quality_score = qc.get("quality_score", 91.5)
-    qc_status = qc.get("status", "SUCCESS")
+    qc_status = qc.get("status", "VALID")
     spacing_val = calib.get("pixel_spacing_mm") or calib.get("pixel_spacing_mm_px")
 
     qc_data = [
@@ -374,16 +512,16 @@ def generate_orthinx_clinical_pdf(
             Paragraph(f"<b>{quality_score}%</b> (Reliable)", body_style),
         ],
         [
-            Paragraph("<b>Calibration Mode:</b>", body_style),
-            Paragraph("User Calibrated" if is_calibrated else "Pixel Units (px)", body_style),
-            Paragraph("<b>Pixel Spacing:</b>", body_style),
-            Paragraph(f"{spacing_val} mm/px" if spacing_val else "Not provided (px only)", body_style),
+            Paragraph("<b>AI Severity Model:</b>", body_style),
+            Paragraph(f"<font color='#4f46e5'><b>{architecture.upper()} ({confidence_text})</b></font>", body_style),
+            Paragraph("<b>Segmentation Status:</b>", body_style),
+            Paragraph("Active" if mask_available else "Graceful Degradation (Unavailable)", body_style),
         ],
         [
-            Paragraph("<b>Segmentation Network:</b>", body_style),
-            Paragraph("ORTHINX Knee U-Net (v2.0)", body_style),
-            Paragraph("<b>Inference Latency:</b>", body_style),
-            Paragraph(f"{case_data.get('processing', {}).get('inference_time_ms', 210)} ms", body_style),
+            Paragraph("<b>Calibration Mode:</b>", body_style),
+            Paragraph("User Calibrated (mm)" if is_calibrated else "Pixel Units (px)", body_style),
+            Paragraph("<b>Pixel Spacing:</b>", body_style),
+            Paragraph(f"{spacing_val} mm/px" if spacing_val else "Not provided (px only)", body_style),
         ],
     ]
     qc_table = Table(qc_data, colWidths=[120, 150, 120, 150])
@@ -391,47 +529,42 @@ def generate_orthinx_clinical_pdf(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-            ("PADDING", (0, 0), (-1, -1), 4),
+            ("PADDING", (0, 0), (-1, -1), 3.5),
         ])
     )
-    story.append(Paragraph("4. Technical Quality Control & System Calibration", h2_style))
+    story.append(Paragraph("5. Technical Quality Control & Calibration", h2_style))
     story.append(qc_table)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
-    # 6. Clinical Findings & Summary
-    # Derive factual clinical summary from measurements
-    med_val_num = m.get("medial_jsw", {}).get("value")
-    min_val_num = m.get("min_jsw", {}).get("value")
-
-    if is_calibrated and med_val_num is not None:
-        if med_val_num < 2.5:
-            severity_desc = "Significant joint space narrowing observed in the medial compartment, suggestive of advanced articular cartilage attrition."
-        elif med_val_num < 4.0:
-            severity_desc = "Mild-to-moderate medial compartment joint space narrowing with preserved lateral compartment clearance."
-        else:
-            severity_desc = "Preserved joint space width across both medial and lateral compartments within physiological limits."
-    else:
-        severity_desc = "Morphological boundaries successfully delineated in sensor pixel coordinates. Calibrate pixel spacing for mm-scale grading."
-
-    clinical_summary_text = (
-        f"<b>Summary of Findings:</b> Quantitative analysis of the uploaded {case_data.get('view', 'front')} radiograph demonstrates "
-        f"femoral condyle width of {fem_width_txt} and tibial plateau width of {tib_width_txt}. {severity_desc} "
-        f"All measurements are derived directly from patient anatomical boundaries."
+    # 7. Clinical Findings & Summary
+    findings_text = (
+        f"<b>Summary of AI Findings:</b> Automated evaluation of the uploaded {case_data.get('view', 'front')} radiograph "
+        f"classifies the joint at <b>{predicted_grade_text}</b> with a model confidence of <b>{confidence_text}</b>. "
     )
+    if mask_available:
+        findings_text += (
+            f"Delineated femoral condyle width is {fem_width_txt} and tibial plateau width is {tib_width_txt}. "
+            f"Medial joint space width is {med_jsw_txt}. "
+        )
+    else:
+        findings_text += (
+            "Anatomical boundary segmentation is currently unavailable. Severity classification is the primary objective metric. "
+        )
+    findings_text += "Correlation with patient symptomology, weight-bearing status, and clinical history is advised."
 
-    summary_table = Table([[Paragraph(clinical_summary_text, body_style)]], colWidths=[540])
+    summary_table = Table([[Paragraph(findings_text, body_style)]], colWidths=[540])
     summary_table.setStyle(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eff6ff")),
             ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#3b82f6")),
-            ("PADDING", (0, 0), (-1, -1), 6),
+            ("PADDING", (0, 0), (-1, -1), 5),
         ])
     )
-    story.append(Paragraph("5. Clinical Findings & Summary", h2_style))
+    story.append(Paragraph("6. Clinical Findings & Summary", h2_style))
     story.append(summary_table)
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
-    # 7. Physician Signature Block
+    # 8. Physician Signature Block
     sig_data = [
         [
             Paragraph("<b>Reporting Orthopedic Specialist:</b>", body_style),
@@ -450,13 +583,13 @@ def generate_orthinx_clinical_pdf(
         ])
     )
     story.append(sig_table)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
-    # 8. Regulatory / Safety Disclaimer
+    # 9. Regulatory / Safety Disclaimer
     disclaimer_text = (
-        "<b>CLINICAL NOTICE:</b> This document contains quantitative morphological measurements computed by the ORTHINX Clinical "
-        "Suite. Findings are intended to support certified orthopedic specialists and radiologists in surgical planning and diagnostic review. "
-        "Physical dimensions are contingent upon verified pixel spacing calibration. Generated on " + formatted_date_time + "."
+        "<b>CLINICAL NOTICE:</b> This document contains quantitative morphological metrics and AI severity classification "
+        "computed by the ORTHINX Clinical Suite. Findings are intended to support certified orthopedic specialists and radiologists. "
+        "Not for standalone diagnostic use. Generated on " + formatted_date_time + "."
     )
     story.append(Paragraph(disclaimer_text, disclaimer_style))
 

@@ -1,58 +1,57 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   UploadCloud,
   File as FileIcon,
   Sparkles,
   X,
-  Sliders,
   CheckCircle2,
   AlertCircle,
-  Eye,
   Activity,
-  Ruler,
   RotateCw,
   ArrowRight,
-  Database,
-  Info,
-  Layers,
-  Crosshair,
-  Compass,
-  FileText,
-  Download,
   User,
+  Calendar,
+  Layers,
+  Zap,
+  Info,
 } from "lucide-react";
-import { AnimatedButton } from "../components/ui/AnimatedButton";
-import { useAnalysisStore, ActiveImageTab, AnatomicalOrientation } from "../store/analysisStore";
-import { scanApi } from "../lib/api";
+import { useAnalysisStore, AnatomicalOrientation } from "../store/analysisStore";
 
 export const UploadImagePage: React.FC = () => {
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [processingPhase, setProcessingPhase] = useState<string>("Preparing radiograph...");
 
   const {
-    caseId,
+    activeCaseId,
     orientation,
-    activeImageTab,
     views,
     pixelSpacingInput,
     patientInfo,
     setPatientInfo,
-    setActiveImageTab,
     setOrientation,
     setUploadedFile,
     setPixelSpacingInput,
     enhanceImage,
     runAnalysis,
     clearAnalysis,
-    resetActiveCase,
-    getDerivedMeasurements,
   } = useAnalysisStore();
 
   const currentView = views[orientation];
-  const derived = getDerivedMeasurements();
+  const hasFile = Boolean(currentView.file || currentView.filePreviewUrl);
+  const isAnalyzing = currentView.isAnalyzing;
 
   const handleFileSelect = (f: File) => {
+    const validExts = [".dcm", ".png", ".jpg", ".jpeg"];
+    const isImage = f.type.startsWith("image/") || validExts.some((ext) => f.name.toLowerCase().endsWith(ext));
+    if (!isImage) {
+      setErrorMessage("Please select a valid radiograph image (DICOM, PNG, or JPEG format).");
+      return;
+    }
+    setErrorMessage(null);
     setUploadedFile(f, orientation);
   };
 
@@ -74,1032 +73,488 @@ export const UploadImagePage: React.FC = () => {
     }
   };
 
-  // Determine current view tab image URL
-  const getActiveTabImageUrl = (): string => {
-    const res = currentView.analysisResult;
-    switch (activeImageTab) {
-      case "original":
-        return currentView.filePreviewUrl || res?.image?.original || res?.segmentation?.original_url || "";
-      case "enhanced":
-        return (
-          currentView.enhancedPreviewUrl ||
-          res?.image?.enhanced ||
-          res?.segmentation?.enhanced_url ||
-          currentView.filePreviewUrl ||
-          ""
-        );
-      case "measurements":
-        return (
-          res?.image?.measurements ||
-          res?.segmentation?.measurements_url ||
-          res?.image?.overlay ||
-          res?.segmentation?.overlay_url ||
-          ""
-        );
-      case "segmentation":
-        return res?.image?.segmentation || res?.segmentation?.mask_url || "";
-      default:
-        return currentView.filePreviewUrl || "";
+  const handleRunAnalysis = async () => {
+    if (!hasFile || isAnalyzing) return;
+    setErrorMessage(null);
+    setProcessingPhase("Preparing radiograph...");
+
+    const phaseTimer1 = setTimeout(() => setProcessingPhase("Running AI segmentation model..."), 800);
+    const phaseTimer2 = setTimeout(() => setProcessingPhase("Extracting anatomical landmark vectors..."), 1800);
+    const phaseTimer3 = setTimeout(() => setProcessingPhase("Calculating joint clearances & measurements..."), 2800);
+
+    try {
+      const res = await runAnalysis(orientation);
+      clearTimeout(phaseTimer1);
+      clearTimeout(phaseTimer2);
+      clearTimeout(phaseTimer3);
+      if (res) {
+        navigate("/analysis/results");
+      }
+    } catch (err: any) {
+      clearTimeout(phaseTimer1);
+      clearTimeout(phaseTimer2);
+      clearTimeout(phaseTimer3);
+      setErrorMessage(
+        err?.message || "Analysis request failed. Please ensure the ORTHINX backend is running."
+      );
     }
   };
 
-  const currentTabUrl = getActiveTabImageUrl();
-  const hasAnalysis = Boolean(currentView.analysisResult && currentView.analysisStatus !== "error");
+  const currentStudyTime = new Date().toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 
   return (
-    <div style={{ maxWidth: "1280px", margin: "0 auto", paddingBottom: "50px" }}>
-      {/* Top Header */}
-      <div className="page-header" style={{ marginBottom: "20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <Activity size={26} color="var(--primary)" />
-              <span>Knee X-Ray Analysis</span>
-            </h1>
-            <p className="page-subtitle">
-              Medical radiograph inspection, image enhancement, and automated anatomical measurement extraction.
-            </p>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => resetActiveCase()}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "8px 14px",
-                fontSize: "12px",
-                fontWeight: 600,
-                borderRadius: "8px",
-              }}
-              title="Clear current case and start a fresh analysis session"
-            >
-              <RotateCw size={13} />
-              <span>New Analysis</span>
-            </button>
-
-            {/* View Selector: FRONT (AP), SIDE (LATERAL), TOP (AXIAL) */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                background: "var(--card-bg)",
-                padding: "4px",
-                borderRadius: "8px",
-                border: "1px solid var(--border)",
-              }}
-            >
-            {(
-              [
-                { id: "front", label: "FRONT (AP)" },
-                { id: "side", label: "SIDE (LATERAL)" },
-                { id: "top", label: "TOP (AXIAL)" },
-              ] as const
-            ).map((v) => {
-              const isSelected = orientation === v.id;
-              const hasFile = Boolean(views[v.id].filePreviewUrl);
-              return (
-                <button
-                  key={v.id}
-                  onClick={() => setOrientation(v.id as AnatomicalOrientation)}
-                  style={{
-                    border: "none",
-                    padding: "6px 12px",
-                    fontSize: "12px",
-                    fontWeight: isSelected ? 700 : 500,
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    background: isSelected ? "var(--primary)" : "transparent",
-                    color: isSelected ? "#ffffff" : "var(--text-main)",
-                    transition: "all 0.15s ease",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span>{v.label}</span>
-                  {hasFile && (
-                    <span
-                      style={{
-                        width: "6px",
-                        height: "6px",
-                        borderRadius: "50%",
-                        background: isSelected ? "#ffffff" : "#22c55e",
-                      }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-            </div>
-          </div>
+    <div style={{ maxWidth: "1280px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
+      {/* 1. Page Header */}
+      <div
+        className="page-header"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "16px",
+          borderBottom: "1px solid var(--border)",
+          paddingBottom: "18px",
+        }}
+      >
+        <div>
+          <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 0 4px 0", fontSize: "22px", fontWeight: 700 }}>
+            <UploadCloud size={24} style={{ color: "var(--primary)" }} />
+            <span>Upload Knee X-Ray</span>
+          </h1>
+          <p className="page-subtitle" style={{ margin: 0, fontSize: "14px", color: "var(--text-secondary)" }}>
+            Import AP, Lateral, or Axial radiographs for automated anatomical AI analysis
+          </p>
         </div>
+
+        {hasFile && currentView.analysisResult && (
+          <button
+            className="btn btn-secondary"
+            onClick={() => navigate("/analysis/results")}
+            style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px" }}
+          >
+            <span>View Current Results</span>
+            <ArrowRight size={16} />
+          </button>
+        )}
       </div>
 
-      {/* Error Banner */}
-      {(currentView.analysisError || currentView.enhancementError) && (
+      {/* Error Alert */}
+      {errorMessage && (
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
+            padding: "14px 18px",
+            borderRadius: "8px",
             background: "rgba(239, 68, 68, 0.1)",
             border: "1px solid rgba(239, 68, 68, 0.3)",
-            color: "#ef4444",
-            padding: "12px 16px",
-            borderRadius: "8px",
-            marginBottom: "20px",
-            fontSize: "14px",
+            color: "#f87171",
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            fontSize: "13px",
           }}
         >
           <AlertCircle size={18} style={{ flexShrink: 0 }} />
-          <span>{currentView.analysisError || currentView.enhancementError}</span>
+          <span>{errorMessage}</span>
         </div>
       )}
 
-      {/* Patient Information Section */}
-      <div className="card" style={{ marginBottom: "22px", padding: "18px 22px", border: "1px solid var(--border)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-          <h2 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-main)", display: "flex", alignItems: "center", gap: "8px", margin: 0 }}>
-            <User size={17} color="var(--primary)" />
-            <span>Patient Information</span>
-          </h2>
-          {hasAnalysis && (
-            <span className="badge badge-success" style={{ fontSize: "11px", fontWeight: 700 }}>
-              Verified Case Record
-            </span>
-          )}
-        </div>
+      {/* 2. Main Two-Column Workspace */}
+      <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: "24px", alignItems: "start" }}>
+        {/* Left Column: Patient/Case Context & Projection Setup */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          {/* Patient Context Card */}
+          <div className="card" style={{ padding: "20px" }}>
+            <h2 className="card-title" style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: 700, marginBottom: "14px" }}>
+              <User size={16} style={{ color: "var(--primary)" }} />
+              Patient & Case Context
+            </h2>
 
-        {hasAnalysis ? (
-          /* Confirmed Patient Details Display */
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "14px",
-              paddingTop: "4px",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Patient ID</div>
-              <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--primary)", marginTop: "2px" }}>
-                {currentView.analysisResult?.patient_code || patientInfo.patientId || "PT-" + (caseId ? caseId.replace("case_", "").toUpperCase().slice(0, 8) : "RECORD")}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Name</div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-                {currentView.analysisResult?.patient_name || patientInfo.patientName || "Patient Record"}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Age & Sex</div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-                {currentView.analysisResult?.patient_age || patientInfo.patientAge || 58} yrs / {currentView.analysisResult?.patient_sex || patientInfo.patientSex || "Female"}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Study Date & Time</div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-                {currentView.analysisResult?.formatted_date || patientInfo.studyDate || new Date().toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Attending Specialist</div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
-                {currentView.analysisResult?.doctor_name || patientInfo.doctorName || "Dr. Alex Morgan"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                {currentView.analysisResult?.doctor_specialization || patientInfo.doctorSpecialization || "Orthopedic Surgeon"}
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* Editable Clinical Patient Form Before Analysis */
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-              gap: "12px",
-              paddingTop: "4px",
-            }}
-          >
-            <div>
-              <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "4px" }}>
-                Patient ID
-              </label>
-              <input
-                type="text"
-                value={patientInfo.patientId}
-                onChange={(e) => setPatientInfo({ patientId: e.target.value })}
-                placeholder="Auto-generated if blank"
-                style={{
-                  width: "100%",
-                  padding: "7px 10px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--border)",
-                  background: "var(--input-bg, transparent)",
-                  color: "var(--text-main)",
-                  fontSize: "13px",
-                }}
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "4px" }}>
-                Patient Name
-              </label>
-              <input
-                type="text"
-                value={patientInfo.patientName}
-                onChange={(e) => setPatientInfo({ patientName: e.target.value })}
-                placeholder="Enter full name"
-                style={{
-                  width: "100%",
-                  padding: "7px 10px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--border)",
-                  background: "var(--input-bg, transparent)",
-                  color: "var(--text-main)",
-                  fontSize: "13px",
-                }}
-              />
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "4px" }}>
-                  Age
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label className="form-label" style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px", display: "block" }}>
+                  Patient ID / MRN
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  max="120"
-                  value={patientInfo.patientAge}
-                  onChange={(e) => setPatientInfo({ patientAge: parseInt(e.target.value) || 58 })}
-                  style={{
-                    width: "100%",
-                    padding: "7px 10px",
-                    borderRadius: "6px",
-                    border: "1px solid var(--border)",
-                    background: "var(--input-bg, transparent)",
-                    color: "var(--text-main)",
-                    fontSize: "13px",
-                  }}
+                  type="text"
+                  className="input"
+                  value={patientInfo.patientId}
+                  onChange={(e) => setPatientInfo({ patientId: e.target.value })}
+                  placeholder="e.g. PT-49821"
                 />
               </div>
-              <div style={{ flex: 1.2 }}>
-                <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "4px" }}>
-                  Sex
+
+              <div>
+                <label className="form-label" style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px", display: "block" }}>
+                  Patient Name
                 </label>
-                <select
-                  value={patientInfo.patientSex}
-                  onChange={(e) => setPatientInfo({ patientSex: e.target.value })}
-                  style={{
-                    width: "100%",
-                    padding: "7px 10px",
-                    borderRadius: "6px",
-                    border: "1px solid var(--border)",
-                    background: "var(--input-bg, transparent)",
-                    color: "var(--text-main)",
-                    fontSize: "13px",
-                  }}
-                >
-                  <option value="Female">Female</option>
-                  <option value="Male">Male</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "4px" }}>
-                Doctor
-              </label>
-              <input
-                type="text"
-                value={patientInfo.doctorName}
-                onChange={(e) => setPatientInfo({ doctorName: e.target.value })}
-                placeholder="Attending doctor"
-                style={{
-                  width: "100%",
-                  padding: "7px 10px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--border)",
-                  background: "var(--input-bg, transparent)",
-                  color: "var(--text-main)",
-                  fontSize: "13px",
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Main Workspace Grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: currentView.filePreviewUrl ? "1.25fr 0.75fr" : "1fr",
-          gap: "24px",
-          alignItems: "start",
-          marginBottom: "28px",
-        }}
-      >
-        {/* Left Section: Upload Dropzone & Main X-Ray Viewer */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {!currentView.filePreviewUrl ? (
-            /* Upload Dropzone */
-            <div
-              className="card"
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              style={{
-                border: isDragOver ? "2px dashed var(--primary)" : "2px dashed var(--border)",
-                background: isDragOver ? "rgba(91, 75, 255, 0.05)" : "var(--card-bg)",
-                padding: "64px 40px",
-                textAlign: "center",
-                cursor: "pointer",
-                transition: "all 0.2s ease",
-                borderRadius: "12px",
-              }}
-              onClick={() => document.getElementById("knee-xray-upload-input")?.click()}
-            >
-              <input
-                id="knee-xray-upload-input"
-                type="file"
-                accept="image/png, image/jpeg, image/tiff, image/bmp, .dcm"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    handleFileSelect(e.target.files[0]);
-                  }
-                }}
-              />
-              <div
-                style={{
-                  width: "64px",
-                  height: "64px",
-                  borderRadius: "50%",
-                  background: "var(--primary-subtle)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  margin: "0 auto 16px",
-                  color: "var(--primary)",
-                }}
-              >
-                <UploadCloud size={32} />
-              </div>
-              <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-                Upload {orientation === "side" ? "Lateral (Side View)" : orientation === "top" ? "Axial (Top View)" : "Front (AP)"} Knee Radiograph
-              </h3>
-              <p style={{ fontSize: "14px", color: "var(--text-muted)", maxWidth: "440px", margin: "0 auto 18px" }}>
-                {orientation === "side"
-                  ? "Upload the actual lateral radiograph to calculate Femoral AP and Tibial AP dimensions."
-                  : orientation === "top"
-                  ? "Upload the actual axial radiograph for patellofemoral articulation review."
-                  : "Upload the front (AP) radiograph to extract femoral width, tibial width, and joint space width."}
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                style={{ padding: "8px 22px" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  document.getElementById("knee-xray-upload-input")?.click();
-                }}
-              >
-                Select Image File
-              </button>
-            </div>
-          ) : (
-            /* Uploaded Image Viewer Card */
-            <div className="card" style={{ padding: "18px" }}>
-              {/* File Info Bar */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "14px",
-                  borderBottom: "1px solid var(--border)",
-                  paddingBottom: "10px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <FileIcon size={16} color="var(--primary)" />
-                  <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)" }}>
-                    {currentView.fileName || "Knee Radiograph"}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      color: "var(--primary)",
-                      background: "var(--primary-subtle)",
-                      padding: "2px 8px",
-                      borderRadius: "4px",
-                    }}
-                  >
-                    {orientation.toUpperCase()} VIEW
-                  </span>
-                  {currentView.dimensions && (
-                    <span style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "4px" }}>
-                      ({currentView.dimensions.width} × {currentView.dimensions.height} px)
-                    </span>
-                  )}
-                </div>
-
-                <button
-                  className="btn btn-secondary btn-sm"
-                  style={{ fontSize: "12px", padding: "4px 10px", color: "var(--danger)" }}
-                  onClick={() => clearAnalysis(orientation)}
-                  title="Remove this image and re-upload"
-                >
-                  <X size={14} /> Clear {orientation.toUpperCase()}
-                </button>
+                <input
+                  type="text"
+                  className="input"
+                  value={patientInfo.patientName}
+                  onChange={(e) => setPatientInfo({ patientName: e.target.value })}
+                  placeholder="e.g. Sarah Johnson"
+                />
               </div>
 
-              {/* 4 Image Tabs: [Original] [Enhanced] [Measurements] [Segmentation Mask] */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: "6px",
-                  background: "var(--bg-card, #1e1b4b)",
-                  padding: "6px",
-                  borderRadius: "10px",
-                  border: "1px solid var(--border)",
-                  marginBottom: "16px",
-                }}
-              >
-                {(
-                  [
-                    { id: "original", label: "Original" },
-                    { id: "enhanced", label: "Enhanced" },
-                    { id: "measurements", label: "Measurements" },
-                    { id: "segmentation", label: "Segmentation Mask" },
-                  ] as const
-                ).map((tab) => {
-                  const isActive = activeImageTab === tab.id;
-                  const isAvailable =
-                    tab.id === "original" ||
-                    (tab.id === "enhanced" && Boolean(currentView.enhancedPreviewUrl || hasAnalysis)) ||
-                    (tab.id === "measurements" && hasAnalysis) ||
-                    (tab.id === "segmentation" && hasAnalysis);
-
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setActiveImageTab(tab.id as ActiveImageTab)}
-                      style={{
-                        flex: 1,
-                        border: isActive ? "1px solid var(--primary)" : "1px solid rgba(255, 255, 255, 0.12)",
-                        padding: "9px 12px",
-                        fontSize: "12.5px",
-                        fontWeight: isActive ? 700 : 600,
-                        borderRadius: "7px",
-                        cursor: "pointer",
-                        background: isActive
-                          ? "var(--primary)"
-                          : "rgba(255, 255, 255, 0.05)",
-                        color: isActive ? "#ffffff" : "var(--text-main, #ffffff)",
-                        boxShadow: isActive ? "0 2px 10px rgba(99, 102, 241, 0.4)" : "none",
-                        transition: "all 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: "6px",
-                        outline: "none",
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          background: isActive
-                            ? "#ffffff"
-                            : isAvailable
-                            ? "#22c55e"
-                            : "#94a3b8",
-                          display: "inline-block",
-                        }}
-                      />
-                      <span>{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Image Viewport */}
-              <div
-                style={{
-                  position: "relative",
-                  width: "100%",
-                  minHeight: "400px",
-                  maxHeight: "560px",
-                  borderRadius: "8px",
-                  overflow: "hidden",
-                  background: "#080c14",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                {currentTabUrl ? (
-                  <img
-                    src={currentTabUrl}
-                    alt={`${activeImageTab} view`}
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: "560px",
-                      objectFit: "contain",
-                      display: "block",
-                      transition: "opacity 0.2s ease",
-                    }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      padding: "40px 20px",
-                      textAlign: "center",
-                      color: "var(--text-muted)",
-                      maxWidth: "380px",
-                    }}
-                  >
-                    <Crosshair size={32} color="var(--primary)" style={{ margin: "0 auto 12px", opacity: 0.8 }} />
-                    <h4 style={{ color: "var(--text-main)", fontSize: "15px", fontWeight: 700, marginBottom: "6px" }}>
-                      {activeImageTab === "enhanced"
-                        ? "Enhancement Not Yet Applied"
-                        : `${activeImageTab === "measurements" ? "Measurements" : "Segmentation"} Not Generated`}
-                    </h4>
-                    <p style={{ fontSize: "13px", marginBottom: "16px" }}>
-                      {activeImageTab === "enhanced"
-                        ? "Click 'Enhance' to generate the contrast-enhanced view."
-                        : `Click 'Analyze Knee' to run the ${orientation.toUpperCase()} segmentation and measurement pipeline.`}
-                    </p>
-                    {activeImageTab === "enhanced" ? (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => enhanceImage(orientation)}
-                        disabled={currentView.isEnhancing}
-                      >
-                        <Eye size={14} /> Enhance Now
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        onClick={() => runAnalysis(orientation)}
-                        disabled={currentView.isAnalyzing}
-                      >
-                        <Sparkles size={14} /> Run Analyze Knee
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* View Badge */}
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "12px",
-                    left: "12px",
-                    background: "rgba(8, 12, 20, 0.75)",
-                    backdropFilter: "blur(4px)",
-                    borderRadius: "4px",
-                    padding: "4px 9px",
-                    color: "#fff",
-                    fontSize: "11px",
-                    fontWeight: 600,
-                    letterSpacing: "0.5px",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                  }}
-                >
-                  PROJECTION: {orientation.toUpperCase()} • {activeImageTab.toUpperCase()}
-                </div>
-
-                {/* Loading State Overlays */}
-                {currentView.isAnalyzing && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: "rgba(0, 0, 0, 0.82)",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "12px",
-                      zIndex: 10,
-                      backdropFilter: "blur(3px)",
-                    }}
-                  >
-                    <RotateCw className="animate-spin" size={34} color="var(--primary)" />
-                    <span style={{ color: "#ffffff", fontSize: "15px", fontWeight: 700 }}>
-                      Analyzing {orientation.toUpperCase()} Radiograph...
-                    </span>
-                    <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>
-                      Extracting knee anatomical boundaries and joint clearances
-                    </span>
-                  </div>
-                )}
-
-                {currentView.isEnhancing && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: "rgba(0, 0, 0, 0.78)",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "10px",
-                      zIndex: 10,
-                      backdropFilter: "blur(2px)",
-                    }}
-                  >
-                    <RotateCw className="animate-spin" size={30} color="var(--primary)" />
-                    <span style={{ color: "#ffffff", fontSize: "14px", fontWeight: 600 }}>
-                      Optimizing contrast and sharpness...
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right Section: Actions & Calibration + Status */}
-        {currentView.filePreviewUrl && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-            {/* Actions Card */}
-            <div className="card">
-              <h2
-                className="card-title"
-                style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}
-              >
-                <Sliders size={18} color="var(--primary)" />
-                <span>Actions & Calibration</span>
-              </h2>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
                 <div>
-                  <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "5px" }}>
-                    Verified Pixel Spacing (mm/px) <span style={{ opacity: 0.7 }}>(Optional)</span>
+                  <label className="form-label" style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px", display: "block" }}>
+                    Age (Years)
                   </label>
                   <input
                     type="number"
-                    step="0.001"
-                    placeholder="e.g. 0.154 (Leave blank for pixel units)"
-                    value={pixelSpacingInput}
-                    onChange={(e) => setPixelSpacingInput(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid var(--border)",
-                      background: "var(--input-bg, transparent)",
-                      color: "var(--text-main)",
-                      fontSize: "13px",
-                    }}
+                    className="input"
+                    value={patientInfo.patientAge}
+                    onChange={(e) => setPatientInfo({ patientAge: parseInt(e.target.value) || 0 })}
                   />
-                  <span style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
-                    If empty, measurements report strictly in sensor pixels (px).
-                  </span>
                 </div>
-
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ flex: 1, padding: "10px", fontWeight: 600 }}
-                    onClick={() => enhanceImage(orientation)}
-                    disabled={currentView.isEnhancing || currentView.isAnalyzing}
+                <div>
+                  <label className="form-label" style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px", display: "block" }}>
+                    Sex
+                  </label>
+                  <select
+                    className="input"
+                    value={patientInfo.patientSex}
+                    onChange={(e) => setPatientInfo({ patientSex: e.target.value })}
                   >
-                    <Eye size={15} />
-                    <span>{currentView.isEnhancing ? "Enhancing..." : "Enhance"}</span>
-                  </button>
-
-                  <AnimatedButton
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ flex: 1.3, padding: "10px", fontWeight: 700 }}
-                    onClick={async () => {
-                      await runAnalysis(orientation);
-                    }}
-                    disabled={currentView.isAnalyzing}
-                  >
-                    <Sparkles size={16} />
-                    <span>{currentView.isAnalyzing ? "Analyzing..." : `Analyze ${orientation.toUpperCase()}`}</span>
-                  </AnimatedButton>
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </div>
               </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "8px", borderTop: "1px solid var(--border)", fontSize: "12px", color: "var(--text-muted)" }}>
+                <span>Study Date:</span>
+                <span style={{ color: "var(--text-main)", fontWeight: 500 }}>{currentStudyTime}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Radiographic View Selector */}
+          <div className="card" style={{ padding: "20px" }}>
+            <h2 className="card-title" style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: 700, marginBottom: "12px" }}>
+              <Layers size={16} style={{ color: "var(--primary)" }} />
+              Radiographic Projection
+            </h2>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
+              {(
+                [
+                  { id: "front", label: "AP", sub: "Frontal" },
+                  { id: "side", label: "Lateral", sub: "Sagittal" },
+                  { id: "top", label: "Axial", sub: "Skyline" },
+                ] as const
+              ).map((v) => {
+                const isSelected = orientation === v.id;
+                const hasScan = Boolean(views[v.id]?.filePreviewUrl);
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => setOrientation(v.id as AnatomicalOrientation)}
+                    style={{
+                      padding: "10px 6px",
+                      borderRadius: "8px",
+                      border: isSelected ? "2px solid var(--primary)" : "1px solid var(--border)",
+                      background: isSelected ? "var(--primary-subtle)" : "var(--bg-app)",
+                      color: isSelected ? "var(--primary)" : "var(--text-main)",
+                      cursor: "pointer",
+                      textAlign: "center",
+                      transition: "all 0.15s ease",
+                      position: "relative",
+                    }}
+                  >
+                    <div style={{ fontSize: "12px", fontWeight: 700 }}>{v.label}</div>
+                    <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>{v.sub}</div>
+                    {hasScan && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: "4px",
+                          right: "4px",
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
+                          background: "#10B981",
+                        }}
+                        title="Radiograph loaded for this view"
+                      />
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Status Summary */}
-            {currentView.analysisResult && (
-              <div className="card" style={{ border: "1px solid var(--primary)" }}>
-                <div
+            {/* Optional Physical Pixel Spacing */}
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                <label className="form-label" style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
+                  Pixel Spacing (mm/px)
+                </label>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Optional</span>
+              </div>
+              <input
+                type="number"
+                step="0.001"
+                className="input"
+                placeholder="Auto-detected if DICOM"
+                value={pixelSpacingInput}
+                onChange={(e) => setPixelSpacingInput(e.target.value)}
+              />
+              <span style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginTop: "4px", lineHeight: 1.4 }}>
+                Leave empty if uncalibrated. Output will report precise native pixel measurements.
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Radiograph Upload Dropzone & Live Image Stage */}
+        <div className="card" style={{ padding: "24px", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--primary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                Active Radiograph Viewport
+              </span>
+              <h2 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-main)", margin: "2px 0 0 0" }}>
+                {orientation === "front" ? "Anterior-Posterior (AP) Projection" : orientation === "side" ? "Lateral Sagittal Projection" : "Axial Skyline Projection"}
+              </h2>
+            </div>
+
+            {hasFile && !isAnalyzing && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => clearAnalysis(orientation)}
+                style={{ fontSize: "12px", color: "var(--danger)", display: "flex", alignItems: "center", gap: "4px" }}
+              >
+                <X size={14} />
+                <span>Clear Image</span>
+              </button>
+            )}
+          </div>
+
+          {/* Upload Dropzone / Viewport */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => {
+              if (!hasFile && fileInputRef.current) {
+                fileInputRef.current.click();
+              }
+            }}
+            style={{
+              flex: 1,
+              minHeight: "440px",
+              borderRadius: "10px",
+              border: isDragOver
+                ? "2px dashed var(--primary)"
+                : hasFile
+                ? "1px solid var(--border)"
+                : "2px dashed var(--border)",
+              background: hasFile ? "#050505" : isDragOver ? "var(--primary-subtle)" : "var(--bg-app)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              position: "relative",
+              overflow: "hidden",
+              cursor: hasFile ? "default" : "pointer",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,.dcm"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleFileSelect(e.target.files[0]);
+                }
+              }}
+            />
+
+            {hasFile ? (
+              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                <img
+                  src={currentView.enhancedPreviewUrl || currentView.filePreviewUrl || ""}
+                  alt="Uploaded Knee Radiograph"
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: "14px",
-                    borderBottom: "1px solid var(--border)",
-                    paddingBottom: "10px",
+                    maxWidth: "100%",
+                    maxHeight: "480px",
+                    objectFit: "contain",
+                    display: "block",
                   }}
-                >
-                  <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
-                    Analysis Status
-                  </span>
+                />
+
+                {currentView.enhancementApplied && (
                   <span
                     style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "5px",
-                      background:
-                        currentView.analysisResult.analysis?.status === "FAILED"
-                          ? "rgba(239, 68, 68, 0.15)"
-                          : "rgba(34, 197, 94, 0.15)",
-                      color:
-                        currentView.analysisResult.analysis?.status === "FAILED"
-                          ? "#ef4444"
-                          : "#22c55e",
-                      padding: "4px 9px",
-                      borderRadius: "6px",
+                      position: "absolute",
+                      top: "12px",
+                      left: "12px",
                       fontSize: "11px",
-                      fontWeight: 700,
+                      fontWeight: 600,
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      background: "rgba(91, 75, 255, 0.2)",
+                      border: "1px solid var(--primary)",
+                      color: "#c7d2fe",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
                     }}
                   >
-                    <CheckCircle2 size={13} />
-                    {currentView.analysisResult.analysis?.status === "FAILED"
-                      ? "FAILED"
-                      : "✓ Analysis completed"}
+                    <Sparkles size={12} />
+                    CLAHE Contrast Enhanced
                   </span>
-                </div>
+                )}
 
+                {/* Status Overlay when analyzing */}
+                {isAnalyzing && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: "rgba(5, 5, 5, 0.8)",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "14px",
+                      backdropFilter: "blur(4px)",
+                    }}
+                  >
+                    <div
+                      className="spinner-border"
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        borderColor: "var(--primary)",
+                        borderRightColor: "transparent",
+                      }}
+                    />
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-main)" }}>
+                        {processingPhase}
+                      </div>
+                      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                        Running UNet++ deep learning pipeline
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Dropzone Placeholder */
+              <div style={{ textAlign: "center", padding: "48px 24px" }}>
                 <div
                   style={{
+                    width: "56px",
+                    height: "56px",
+                    borderRadius: "50%",
+                    background: "var(--primary-subtle)",
+                    color: "var(--primary)",
                     display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                    fontSize: "12px",
-                    color: "var(--text-muted)",
-                    marginBottom: "18px",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    margin: "0 auto 16px",
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Inference Latency:</span>
-                    <span style={{ fontWeight: 600, color: "var(--text-main)" }}>
-                      {currentView.analysisResult.analysis?.latency_ms ?? currentView.analysisResult.processing?.inference_time_ms ?? 0} ms
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Quality Score:</span>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color:
-                          (currentView.analysisResult.analysis?.quality_score ?? 0) >= 60
-                            ? "#22c55e"
-                            : "#eab308",
-                      }}
-                    >
-                      {currentView.analysisResult.analysis?.quality_score ?? currentView.analysisResult.quality_control?.quality_score ?? 91.5}%
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Calibration Mode:</span>
-                    <span style={{ fontWeight: 600, color: "var(--text-main)" }}>
-                      {derived?.isCalibrated ? "User calibrated" : "Pixel units only"}
-                    </span>
-                  </div>
+                  <UploadCloud size={28} />
                 </div>
-
-                {/* Navigation buttons */}
-                <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
-                  <button
-                    className="btn btn-secondary"
-                    style={{
-                      width: "100%",
-                      justifyContent: "space-between",
-                      padding: "10px 14px",
-                      fontWeight: 600,
-                      fontSize: "13px",
-                    }}
-                    onClick={() => navigate("/meniscus-analysis")}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Layers size={15} color="var(--primary)" /> Meniscus Analysis
-                    </span>
-                    <ArrowRight size={15} />
-                  </button>
-
-                  <button
-                    className="btn btn-primary"
-                    style={{
-                      width: "100%",
-                      justifyContent: "space-between",
-                      padding: "10px 14px",
-                      fontWeight: 700,
-                      fontSize: "13px",
-                    }}
-                    onClick={() => {
-                      const activeCaseId = currentView?.analysisResult?.case_id || views?.front?.analysisResult?.case_id || views?.side?.analysisResult?.case_id;
-                      navigate(activeCaseId ? `/anatomical-measurements/${activeCaseId}` : "/anatomical-measurements");
-                    }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Ruler size={15} /> Anatomical Measurements
-                    </span>
-                    <ArrowRight size={15} />
-                  </button>
-
-                  <button
-                    className="btn btn-secondary"
-                    style={{
-                      width: "100%",
-                      justifyContent: "space-between",
-                      padding: "10px 14px",
-                      fontWeight: 600,
-                      fontSize: "13px",
-                    }}
-                    onClick={() => navigate("/implant-planning")}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Sparkles size={15} color="var(--primary)" /> Implant Planning
-                    </span>
-                    <ArrowRight size={15} />
-                  </button>
-
-                  <button
-                    className="btn btn-outline"
-                    style={{
-                      width: "100%",
-                      justifyContent: "space-between",
-                      padding: "10px 14px",
-                      fontWeight: 600,
-                      fontSize: "13px",
-                      color: "var(--primary)",
-                      borderColor: "var(--primary)",
-                    }}
-                    onClick={async () => {
-                      if (currentView.analysisResult?.case_id) {
-                        await scanApi.downloadCasePdf(currentView.analysisResult.case_id);
-                      } else {
-                        navigate("/reports");
-                      }
-                    }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <FileText size={15} color="var(--primary)" /> Download PDF Report
-                    </span>
-                    <Download size={15} />
-                  </button>
-                </div>
+                <h3 style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-main)", marginBottom: "6px" }}>
+                  Select or Drag & Drop Knee Radiograph
+                </h3>
+                <p style={{ fontSize: "13px", color: "var(--text-secondary)", maxWidth: "340px", margin: "0 auto 16px" }}>
+                  Supports DICOM (.dcm), high-resolution PNG, and JPEG imaging files.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  Browse Files
+                </button>
               </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* DEDICATED SECTION: IMAGE-DERIVED MEASUREMENTS */}
-      <div className="card" style={{ marginTop: "12px", border: "1px solid var(--border)" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            borderBottom: "1px solid var(--border)",
-            paddingBottom: "14px",
-            marginBottom: "18px",
-          }}
-        >
-          <div>
-            <h2
-              className="card-title"
-              style={{
-                fontSize: "17px",
-                fontWeight: 800,
-                color: "var(--text-main)",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                margin: 0,
-              }}
-            >
-              <Database size={18} color="var(--primary)" />
-              <span>IMAGE-DERIVED MEASUREMENTS</span>
-            </h2>
-            <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "4px 0 0" }}>
-              Directly extracted from the uploaded knee radiograph segmentation and articulation geometry
-            </p>
-          </div>
-
-          {derived && (
+          {/* Action Bar Beneath Preview */}
+          {hasFile ? (
             <div
               style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                color: derived.isCalibrated ? "#22c55e" : "#eab308",
-                background: derived.isCalibrated ? "rgba(34, 197, 94, 0.1)" : "rgba(234, 179, 8, 0.1)",
-                padding: "4px 10px",
-                borderRadius: "6px",
-                border: derived.isCalibrated ? "1px solid rgba(34, 197, 94, 0.3)" : "1px solid rgba(234, 179, 8, 0.3)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: "12px",
+                marginTop: "18px",
+                paddingTop: "16px",
+                borderTop: "1px solid var(--border)",
               }}
             >
-              {derived.isCalibrated
-                ? `User calibrated: ${derived.pixelSpacing} mm/px`
-                : "Pixel units only (Physical scale unavailable)"}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => enhanceImage(orientation)}
+                  disabled={currentView.isEnhancing || isAnalyzing}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}
+                  title="Enhance contrast using CLAHE preprocessing"
+                >
+                  <Sparkles size={14} style={{ color: "var(--primary)" }} />
+                  <span>{currentView.isEnhancing ? "Enhancing..." : "Apply Contrast (CLAHE)"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isAnalyzing}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}
+                >
+                  <RotateCw size={13} />
+                  <span>Replace Radiograph</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleRunAnalysis}
+                disabled={isAnalyzing}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "9px 20px",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                }}
+              >
+                <Zap size={15} />
+                <span>{isAnalyzing ? "Processing..." : "Run AI Analysis"}</span>
+                {!isAnalyzing && <ArrowRight size={15} />}
+              </button>
+            </div>
+          ) : (
+            <div style={{ marginTop: "14px", display: "flex", alignItems: "center", gap: "8px", color: "var(--text-muted)", fontSize: "12px" }}>
+              <Info size={14} />
+              <span>No analysis available yet. Upload a radiograph to begin.</span>
             </div>
           )}
         </div>
-
-        {/* State 1: Analysis not yet performed */}
-        {!derived && (
-          <div
-            style={{
-              padding: "36px 20px",
-              textAlign: "center",
-              color: "var(--text-muted)",
-              background: "var(--primary-subtle)",
-              borderRadius: "8px",
-              border: "1px dashed var(--border)",
-            }}
-          >
-            <Info size={26} style={{ margin: "0 auto 8px", opacity: 0.6 }} />
-            <p style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-main)", margin: "0 0 4px" }}>
-              Run Analyze Knee to calculate image-derived measurements.
-            </p>
-            <p style={{ fontSize: "12px", margin: 0 }}>
-              Once analyzed, genuine morphological dimensions and JSW clearances will populate below.
-            </p>
-          </div>
-        )}
-
-        {/* State 2: Analysis Results Loaded */}
-        {derived && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Femoral Width</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginTop: "4px" }}>{derived.femoralWidthMLText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Condyle horizontal span (AP)</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Tibial Plateau Width</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginTop: "4px" }}>{derived.tibialPlateauWidthText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Articular plateau span (AP)</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Femoral AP</div>
-              <div style={{ fontSize: derived.femoralAP ? "18px" : "13px", fontWeight: 700, color: derived.femoralAP ? "#a855f7" : "var(--text-muted)", marginTop: "4px" }}>
-                {derived.femoralAPText}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Anteroposterior femoral depth (Lateral)</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Tibial AP</div>
-              <div style={{ fontSize: derived.tibialAP ? "18px" : "13px", fontWeight: 700, color: derived.tibialAP ? "#a855f7" : "var(--text-muted)", marginTop: "4px" }}>
-                {derived.tibialAPText}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Anteroposterior tibial depth (Lateral)</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Medial Joint Space Width</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "#22c55e", marginTop: "4px" }}>{derived.medialJSWText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Medial load-bearing clearance</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Lateral Joint Space Width</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "#22c55e", marginTop: "4px" }}>{derived.lateralJSWText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Lateral compartment clearance</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Minimum JSW (Focal)</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "#eab308", marginTop: "4px" }}>{derived.jswMinText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Narrowest point across joint</div>
-            </div>
-
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Joint Space Area</div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-main)", marginTop: "4px" }}>{derived.jointAreaText}</div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>Segmented joint space mass</div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

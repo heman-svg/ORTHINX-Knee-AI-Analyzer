@@ -16,8 +16,6 @@ from app.services.single_image.pipeline import (
     analyze_single_knee_image,
     DEFAULT_ENHANCEMENT_CONFIG,
     get_v2_model,
-    get_case_record,
-    save_case_record,
 )
 
 __all__ = [
@@ -32,6 +30,4 @@ __all__ = [
     "analyze_single_knee_image",
     "DEFAULT_ENHANCEMENT_CONFIG",
     "get_v2_model",
-    "get_case_record",
-    "save_case_record",
 ]

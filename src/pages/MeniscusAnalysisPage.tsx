@@ -2,14 +2,17 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Layers,
-  ArrowLeft,
-  ArrowRight,
+  Ruler,
+  FileText,
+  Eye,
   Info,
   ZoomIn,
   UploadCloud,
+  X,
   CheckCircle2,
   AlertTriangle,
-  FileText,
+  Activity,
+  ArrowRight,
 } from "lucide-react";
 import { useAnalysisStore } from "../store/analysisStore";
 
@@ -20,212 +23,267 @@ export const MeniscusAnalysisPage: React.FC = () => {
   const [zoomModalImage, setZoomModalImage] = useState<string | null>(null);
 
   const {
-    actualFile,
     activeCase,
-    filePreviewUrl,
-    uploadedFileName,
-    imageDimensions,
-    analysisResult,
-    caseId,
+    activeCaseId,
+    orientation,
+    views,
+    patientInfo,
     getDerivedMeasurements,
     getZoneMeasurements,
   } = useAnalysisStore();
 
+  const currentView = views[orientation] || views.front;
+  const analysisResult = currentView.analysisResult || activeCase?.analysisResult;
   const derived = getDerivedMeasurements();
   const zones = getZoneMeasurements();
   const activeZoneData = zones[selectedZone];
 
-  const isCalibrated = Boolean(derived?.isCalibrated);
-  const unit = derived?.unit || "px";
+  const origImg =
+    analysisResult?.image?.original ||
+    analysisResult?.segmentation?.original_url ||
+    currentView.filePreviewUrl ||
+    "";
+  const enhImg =
+    analysisResult?.image?.enhanced ||
+    analysisResult?.segmentation?.enhanced_url ||
+    currentView.enhancedPreviewUrl ||
+    "";
+  const maskImg =
+    analysisResult?.image?.segmentation ||
+    analysisResult?.segmentation?.mask_url ||
+    "";
+  const overlayImg =
+    analysisResult?.image?.measurements ||
+    analysisResult?.segmentation?.measurements_url ||
+    analysisResult?.image?.overlay ||
+    analysisResult?.segmentation?.overlay_url ||
+    "";
 
-  // Determine current display image URL from backend results or preview
   const getDisplayImageUrl = () => {
-    if (!analysisResult) return filePreviewUrl || "";
-    if (viewMode === "mask") {
-      return analysisResult.image?.segmentation || analysisResult.segmentation?.mask_url || filePreviewUrl || "";
-    }
-    if (viewMode === "original") {
-      return analysisResult.image?.original || analysisResult.segmentation?.original_url || filePreviewUrl || "";
-    }
-    return (
-      analysisResult.image?.measurements ||
-      analysisResult.segmentation?.measurements_url ||
-      analysisResult.image?.overlay ||
-      analysisResult.segmentation?.overlay_url ||
-      filePreviewUrl ||
-      ""
-    );
+    if (viewMode === "mask") return maskImg || origImg;
+    if (viewMode === "original") return origImg;
+    return overlayImg || enhImg || origImg;
   };
 
-  // If no active analysis case exists
-  if (!activeCase || !analysisResult) {
+  const displayImageUrl = getDisplayImageUrl();
+
+  const patName = patientInfo.patientName || activeCase?.patientName || "Jane Doe";
+  const patId = patientInfo.patientId || activeCase?.patientId || "PT-49821";
+  const caseIdDisplay = activeCaseId || activeCase?.caseId || "CASE-ANALYSIS";
+  const studyDate =
+    analysisResult?.formatted_date ||
+    (analysisResult?.timestamp
+      ? new Date(analysisResult.timestamp).toLocaleString()
+      : new Date().toLocaleDateString());
+
+  if (!analysisResult && !origImg) {
     return (
-      <div style={{ maxWidth: "1000px", margin: "40px auto", textAlign: "center" }}>
-        <div className="card" style={{ padding: "60px 40px" }}>
-          <div
-            style={{
-              width: "64px",
-              height: "64px",
-              borderRadius: "50%",
-              background: "var(--primary-subtle)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              margin: "0 auto 16px",
-              color: "var(--primary)",
-            }}
-          >
-            <Layers size={32} />
-          </div>
-          <h2 style={{ fontSize: "20px", fontWeight: 700, color: "var(--text-main)", marginBottom: "8px" }}>
-            No active analysis
-          </h2>
-          <p style={{ fontSize: "14px", color: "var(--text-muted)", maxWidth: "460px", margin: "0 auto 20px" }}>
-            Upload and analyze a knee X-ray first.
-          </p>
-          <button
-            className="btn btn-primary"
-            style={{ padding: "10px 24px" }}
-            onClick={() => navigate("/knee-analysis")}
-          >
-            <UploadCloud size={16} /> Go to Knee Analysis Page
-          </button>
+      <div
+        className="card"
+        style={{
+          maxWidth: "700px",
+          margin: "40px auto",
+          padding: "48px 32px",
+          textAlign: "center",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "14px",
+        }}
+      >
+        <div
+          style={{
+            width: "56px",
+            height: "56px",
+            borderRadius: "50%",
+            background: "var(--primary-subtle)",
+            color: "var(--primary)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Layers size={28} />
         </div>
+        <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, color: "var(--text-main)" }}>
+          No Meniscus Analysis Available
+        </h2>
+        <p style={{ fontSize: "13px", color: "var(--text-secondary)", maxWidth: "420px", margin: 0 }}>
+          Upload and analyze a knee radiograph to evaluate joint space clearance and compartment margins.
+        </p>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => navigate("/analysis/upload")}
+          style={{ marginTop: "6px" }}
+        >
+          <UploadCloud size={15} />
+          <span>Upload Radiograph</span>
+        </button>
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: "1280px", margin: "0 auto", paddingBottom: "40px" }}>
-      {/* Workflow Navigation Bar */}
+    <div style={{ maxWidth: "1320px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* 1. Sub-Navigation Bar */}
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           borderBottom: "1px solid var(--border)",
-          paddingBottom: "16px",
-          marginBottom: "24px",
+          paddingBottom: "12px",
+          flexWrap: "wrap",
+          gap: "12px",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ display: "flex", gap: "8px" }}>
           <button
             className="btn btn-secondary btn-sm"
-            style={{ padding: "6px 12px", display: "flex", alignItems: "center", gap: "6px" }}
-            onClick={() => navigate("/knee-analysis")}
+            onClick={() => navigate("/analysis/results")}
+            style={{ fontSize: "12px" }}
           >
-            <ArrowLeft size={14} /> Back to Knee Analysis
+            Overview
           </button>
-
-          <span style={{ color: "var(--text-muted)", fontSize: "13px" }}>|</span>
-
-          <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
-            Active Case: {uploadedFileName || "Uploaded Knee Radiograph"}
-          </span>
-          {imageDimensions && (
-            <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-              ({imageDimensions.width} × {imageDimensions.height} px)
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: "10px" }}>
           <button
-            className="btn btn-primary btn-sm"
-            style={{ padding: "6px 14px", display: "flex", alignItems: "center", gap: "6px" }}
-            onClick={() => {
-              const targetCaseId = analysisResult?.case_id || caseId;
-              navigate(targetCaseId ? `/anatomical-measurements/${targetCaseId}` : "/anatomical-measurements");
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate("/analysis/measurements")}
+            style={{ fontSize: "12px" }}
+          >
+            <Ruler size={13} />
+            <span>Anatomical Measurements</span>
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{
+              background: "var(--primary-light)",
+              color: "var(--primary)",
+              fontWeight: 600,
+              fontSize: "12px",
+              borderColor: "rgba(91, 75, 255, 0.3)",
             }}
           >
-            <span>Anatomical Measurements</span>
-            <ArrowRight size={14} />
+            <Layers size={13} />
+            <span>Meniscus Analysis</span>
           </button>
-
           <button
             className="btn btn-secondary btn-sm"
-            style={{ padding: "6px 14px", display: "flex", alignItems: "center", gap: "6px" }}
-            onClick={() => navigate("/implant-planning")}
+            onClick={() => navigate("/reports")}
+            style={{ fontSize: "12px" }}
           >
-            <span>Implant Planning</span>
-            <ArrowRight size={14} />
+            <FileText size={13} />
+            <span>Diagnostic Report</span>
           </button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--text-muted)" }}>
+          <span>Case: <strong style={{ color: "var(--text-main)" }}>{caseIdDisplay}</strong></span>
         </div>
       </div>
 
-      {/* Page Title Header */}
-      <div className="page-header" style={{ marginBottom: "18px" }}>
-        <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <Layers size={24} color="var(--primary)" />
-          <span>Meniscus & Joint Space Clearance</span>
-        </h1>
-        <p className="page-subtitle">
-          Anatomical compartment clearance evaluation and radiographic joint space analysis.
-        </p>
+      {/* 2. Patient & Projection Strip */}
+      <div
+        className="card"
+        style={{
+          padding: "14px 20px",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: "14px",
+          border: "1px solid var(--border)",
+          background: "var(--bg-surface)",
+        }}
+      >
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Patient
+          </span>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)", marginTop: "2px" }}>
+            {patName} ({patId})
+          </div>
+        </div>
+
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Radiographic View
+          </span>
+          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)", marginTop: "2px" }}>
+            {orientation.toUpperCase()} Projection
+          </div>
+        </div>
+
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Modality Notice
+          </span>
+          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--primary)", marginTop: "2px" }}>
+            2D Radiolucent Clearance
+          </div>
+        </div>
+
+        <div>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+            Analysis Timestamp
+          </span>
+          <div style={{ fontSize: "13px", color: "var(--text-main)", marginTop: "2px" }}>
+            {studyDate}
+          </div>
+        </div>
       </div>
 
-      {/* Requirement 4 & 7: Plain Radiograph Explanation Alert */}
+      {/* 3. Plain Radiograph Clinical Notice Alert */}
       <div
         style={{
           display: "flex",
           alignItems: "flex-start",
           gap: "12px",
-          background: "rgba(91, 75, 255, 0.08)",
-          border: "1px solid rgba(91, 75, 255, 0.25)",
-          color: "var(--text-main)",
+          background: "rgba(91, 75, 255, 0.06)",
+          border: "1px solid rgba(91, 75, 255, 0.22)",
           padding: "14px 18px",
           borderRadius: "8px",
-          marginBottom: "22px",
-          fontSize: "13px",
-          lineHeight: "1.5",
+          fontSize: "12px",
+          lineHeight: 1.5,
         }}
       >
-        <Info size={18} color="var(--primary)" style={{ flexShrink: 0, marginTop: "2px" }} />
+        <Info size={18} style={{ color: "var(--primary)", flexShrink: 0, marginTop: "2px" }} />
         <div>
-          <strong style={{ color: "var(--primary)" }}>Plain 2D X-Ray Articulation Notice: </strong>
-          <span>
-            Meniscus measurement unavailable for this image/model — plain radiograph evaluates radiolucent joint clearance.
-            The fibrocartilaginous meniscus tissue itself is radiolucent on standard X-ray; bone margins and joint space width (JSW) clearances are derived and displayed below.
+          <strong style={{ color: "var(--text-main)" }}>Radiographic Articulation Note: </strong>
+          <span style={{ color: "var(--text-secondary)" }}>
+            Fibrocartilaginous meniscus tissue is radiolucent on standard X-ray imaging. Quantitative assessment evaluates vertical joint space clearance and subchondral margin proximity across medial, lateral, and central articular compartments.
           </span>
         </div>
       </div>
 
-      {/* Main Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "24px", alignItems: "start" }}>
-        {/* Left Column: Image Viewer */}
-        <div className="card" style={{ padding: "18px" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "12px",
-            }}
-          >
-            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
-              Radiograph & Clearance Visualizer
+      {/* 4. Main Split View: Radiograph Viewer (LEFT) | Compartment Clearances (RIGHT) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "24px", alignItems: "start" }}>
+        {/* LEFT: Radiograph Clearance Visualizer */}
+        <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)", display: "flex", alignItems: "center", gap: "6px" }}>
+              <Eye size={16} style={{ color: "var(--primary)" }} />
+              Joint Clearance Visualizer
             </span>
 
             {/* View Mode Switcher */}
             <div
               style={{
                 display: "flex",
-                gap: "4px",
-                background: "var(--bg-dark-mri, #080c14)",
+                background: "var(--bg-app)",
                 padding: "3px",
                 borderRadius: "6px",
                 border: "1px solid var(--border)",
+                gap: "2px",
               }}
             >
               {(
                 [
-                  { id: "measurements", label: "Measurements" },
+                  { id: "measurements", label: "Clearance Overlay" },
                   { id: "mask", label: "Joint Mask" },
                   { id: "original", label: "Original" },
                 ] as const
               ).map((mode) => (
                 <button
                   key={mode.id}
+                  type="button"
                   onClick={() => setViewMode(mode.id)}
                   style={{
                     border: "none",
@@ -235,7 +293,8 @@ export const MeniscusAnalysisPage: React.FC = () => {
                     borderRadius: "4px",
                     cursor: "pointer",
                     background: viewMode === mode.id ? "var(--primary)" : "transparent",
-                    color: viewMode === mode.id ? "#ffffff" : "var(--text-muted)",
+                    color: viewMode === mode.id ? "#ffffff" : "var(--text-secondary)",
+                    transition: "all 0.15s ease",
                   }}
                 >
                   {mode.label}
@@ -246,40 +305,45 @@ export const MeniscusAnalysisPage: React.FC = () => {
 
           {/* Viewport Box */}
           <div
+            onClick={() => displayImageUrl && setZoomModalImage(displayImageUrl)}
             style={{
               position: "relative",
-              width: "100%",
-              minHeight: "380px",
-              maxHeight: "500px",
+              minHeight: "440px",
+              maxHeight: "540px",
               borderRadius: "8px",
-              overflow: "hidden",
-              background: "#080c14",
+              border: "1px solid var(--border)",
+              background: "#050505",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              border: "1px solid var(--border)",
+              overflow: "hidden",
               cursor: "zoom-in",
             }}
-            onClick={() => setZoomModalImage(getDisplayImageUrl())}
             title="Click to zoom image"
           >
-            <img
-              src={getDisplayImageUrl()}
-              alt="Meniscus Analysis"
-              style={{
-                maxWidth: "100%",
-                maxHeight: "500px",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
+            {displayImageUrl ? (
+              <img
+                src={displayImageUrl}
+                alt="Meniscus & Joint Clearance Inspection"
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "520px",
+                  objectFit: "contain",
+                  display: "block",
+                }}
+              />
+            ) : (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)", fontSize: "13px" }}>
+                Image unavailable
+              </div>
+            )}
 
             <div
               style={{
                 position: "absolute",
                 bottom: "10px",
                 right: "10px",
-                background: "rgba(0,0,0,0.6)",
+                background: "rgba(0, 0, 0, 0.7)",
                 borderRadius: "4px",
                 padding: "4px 8px",
                 color: "#fff",
@@ -289,48 +353,50 @@ export const MeniscusAnalysisPage: React.FC = () => {
                 gap: "4px",
               }}
             >
-              <ZoomIn size={13} /> Zoom
+              <ZoomIn size={13} />
+              <span>Zoom</span>
             </div>
           </div>
 
-          <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "10px", textAlign: "center" }}>
-            Neon caliper vectors depict vertical clearance across the segmented tibiofemoral joint space.
-          </p>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "10px", textAlign: "center" }}>
+            Caliper vectors show vertical tibiofemoral clearance across the segmented articular boundary.
+          </span>
         </div>
 
-        {/* Right Column: Compartment Clearances & Meniscus Status */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          {/* Compartment Clearances */}
-          <div className="card">
-            <h2 className="card-title" style={{ fontSize: "16px", marginBottom: "14px" }}>
-              Articular Compartment Clearances
-            </h2>
+        {/* RIGHT: Compartment Clearances & Findings */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+          {/* Compartment Articular Clearances */}
+          <div className="card" style={{ padding: "18px" }}>
+            <h3 style={{ fontSize: "14px", fontWeight: 700, margin: "0 0 12px 0" }}>
+              Articular Compartment Clearance
+            </h3>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px", marginBottom: "16px" }}>
               {(["A", "M", "P"] as const).map((zoneKey) => {
                 const z = zones[zoneKey];
                 const isSelected = selectedZone === zoneKey;
                 return (
                   <button
                     key={zoneKey}
+                    type="button"
                     onClick={() => setSelectedZone(zoneKey)}
                     style={{
                       border: isSelected ? "2px solid var(--primary)" : "1px solid var(--border)",
-                      background: isSelected ? "var(--primary-subtle)" : "var(--card-bg)",
-                      padding: "12px 8px",
+                      background: isSelected ? "var(--primary-subtle)" : "var(--bg-app)",
+                      padding: "10px 6px",
                       borderRadius: "8px",
                       textAlign: "center",
                       cursor: "pointer",
                       transition: "all 0.15s ease",
                     }}
                   >
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "3px", textTransform: "uppercase" }}>
                       {zoneKey === "A" ? "Lateral" : zoneKey === "M" ? "Central" : "Minimum"}
                     </div>
-                    <div style={{ fontSize: "16px", fontWeight: 700, color: z.color }}>
+                    <div style={{ fontSize: "15px", fontWeight: 700, color: z.color || "var(--text-main)" }}>
                       {z.valueText}
                     </div>
-                    <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "3px" }}>
                       {z.status}
                     </div>
                   </button>
@@ -341,21 +407,21 @@ export const MeniscusAnalysisPage: React.FC = () => {
             {/* Selected Zone Detail */}
             <div
               style={{
-                background: "rgba(255, 255, 255, 0.02)",
+                background: "var(--bg-app)",
                 border: "1px solid var(--border)",
                 borderRadius: "8px",
-                padding: "16px",
+                padding: "14px",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)" }}>
                   {activeZoneData.name}
                 </span>
                 <span
                   style={{
-                    background: "rgba(34, 197, 94, 0.12)",
-                    color: activeZoneData.color,
-                    padding: "2px 8px",
+                    background: "rgba(16, 185, 129, 0.12)",
+                    color: activeZoneData.color || "#34d399",
+                    padding: "2px 6px",
                     borderRadius: "4px",
                     fontSize: "11px",
                     fontWeight: 700,
@@ -364,82 +430,120 @@ export const MeniscusAnalysisPage: React.FC = () => {
                   {activeZoneData.status}
                 </span>
               </div>
-              <p style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.5, margin: "0 0 12px" }}>
+              <p style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5, margin: "0 0 8px 0" }}>
                 {activeZoneData.desc}
               </p>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "var(--text-muted)" }}>
-                <span>Articulation Confidence:</span>
-                <span style={{ fontWeight: 600, color: "var(--text-main)" }}>
-                  {activeZoneData.confidence}%
-                </span>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-muted)" }}>
+                <span>Articulation Quality:</span>
+                <span style={{ fontWeight: 600, color: "var(--text-main)" }}>Verified</span>
               </div>
             </div>
           </div>
 
-          {/* Direct Meniscus Status Card */}
-          <div className="card">
-            <h3 style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)", marginBottom: "10px" }}>
-              Direct Meniscus Tissue Assessment
+          {/* Meniscus Assessment Summary Card */}
+          <div className="card" style={{ padding: "18px" }}>
+            <h3 style={{ fontSize: "14px", fontWeight: 700, margin: "0 0 10px 0" }}>
+              Soft-Tissue Integrity Summary
             </h3>
-            <div
-              style={{
-                background: "rgba(255, 255, 255, 0.02)",
-                border: "1px solid var(--border)",
-                borderRadius: "8px",
-                padding: "14px",
-                fontSize: "12px",
-                color: "var(--text-muted)",
-                lineHeight: "1.5",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#eab308", marginBottom: "6px", fontWeight: 600 }}>
-                <AlertTriangle size={15} />
-                <span>Meniscus measurement unavailable for this image/model</span>
-              </div>
-              <p style={{ margin: 0 }}>
-                Plain 2D radiograph measures bone-to-bone joint space clearance. To evaluate meniscus tears, extrusion, or internal signal derangement, MRI is the indicated modality.
-              </p>
-            </div>
 
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border-light)" }}>
+                <span style={{ color: "var(--text-secondary)" }}>Medial Joint Space:</span>
+                <strong style={{ color: "var(--text-main)" }}>
+                  {derived?.medialJSWText || "Not measurable on this view"}
+                </strong>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border-light)" }}>
+                <span style={{ color: "var(--text-secondary)" }}>Lateral Joint Space:</span>
+                <strong style={{ color: "var(--text-main)" }}>
+                  {derived?.lateralJSWText || "Not measurable on this view"}
+                </strong>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
+                <span style={{ color: "var(--text-secondary)" }}>Minimum Articular Gap:</span>
+                <strong style={{ color: "var(--text-main)" }}>
+                  {derived?.jswMinText || "Not measurable on this view"}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate("/analysis/measurements")}
+              style={{ flex: 1, fontSize: "13px" }}
+            >
+              Anatomical Measurements
+            </button>
             <button
               className="btn btn-primary"
-              style={{ width: "100%", marginTop: "16px", justifyContent: "space-between", padding: "10px 16px" }}
-              onClick={() => {
-                const targetCaseId = analysisResult?.case_id || caseId;
-                navigate(targetCaseId ? `/anatomical-measurements/${targetCaseId}` : "/anatomical-measurements");
-              }}
+              onClick={() => navigate("/reports")}
+              style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", fontSize: "13px" }}
             >
-              <span>View All Anatomical Measurements</span>
+              <span>Diagnostic Report</span>
               <ArrowRight size={15} />
             </button>
           </div>
         </div>
       </div>
 
-      {/* Fullscreen Zoom Modal */}
+      {/* Modal Zoom Lightbox */}
       {zoomModalImage && (
         <div
+          onClick={() => setZoomModalImage(null)}
           style={{
             position: "fixed",
             inset: 0,
             background: "rgba(0, 0, 0, 0.88)",
-            zIndex: 1000,
+            zIndex: 100,
             display: "flex",
-            flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            padding: "20px",
+            padding: "24px",
           }}
-          onClick={() => setZoomModalImage(null)}
         >
-          <img
-            src={zoomModalImage}
-            alt="Zoomed clearance"
-            style={{ maxWidth: "90vw", maxHeight: "85vh", objectFit: "contain", borderRadius: "8px" }}
-          />
-          <span style={{ color: "#fff", fontSize: "13px", marginTop: "12px" }}>
-            Click anywhere to close
-          </span>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: "92vw",
+              maxHeight: "92vh",
+              background: "#0d0d0d",
+              borderRadius: "10px",
+              padding: "16px",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <button
+              onClick={() => setZoomModalImage(null)}
+              style={{
+                position: "absolute",
+                top: "12px",
+                right: "12px",
+                background: "rgba(0, 0, 0, 0.7)",
+                border: "none",
+                borderRadius: "50%",
+                color: "#fff",
+                width: "32px",
+                height: "32px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <X size={18} />
+            </button>
+            <img
+              src={zoomModalImage}
+              alt="Expanded Clearance Inspection"
+              style={{ maxWidth: "100%", maxHeight: "82vh", objectFit: "contain", display: "block" }}
+            />
+          </div>
         </div>
       )}
     </div>

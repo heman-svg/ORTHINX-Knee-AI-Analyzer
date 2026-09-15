@@ -113,9 +113,10 @@ export interface DerivedMeasurements {
 export interface AnalysisStoreState {
   // Single Source of Truth for the active clinical case
   activeCase: ActiveCase | null;
+  activeCaseId: string | null;
+  caseId: string | null;
 
   // Active Navigation & View
-  caseId: string | null;
   activeImageTab: ActiveImageTab;
   orientation: AnatomicalOrientation;
   pixelSpacingInput: string;
@@ -156,9 +157,12 @@ export interface AnalysisStoreState {
   setActiveImageTab: (tab: ActiveImageTab) => void;
   setOrientation: (orientation: AnatomicalOrientation) => void;
   setPixelSpacingInput: (val: string) => void;
+  setActiveCaseId: (id: string | null) => void;
+  hasActiveCase: () => boolean;
   enhanceImage: (targetView?: AnatomicalOrientation) => Promise<void>;
   runAnalysis: (targetView?: AnatomicalOrientation) => Promise<SingleImageAnalysisResponse | null>;
   clearAnalysis: (targetView?: AnatomicalOrientation | "all") => void;
+  clearActiveCase: () => void;
   resetActiveCase: () => void;
   startNewAnalysis: () => void;
   setScanResult: (result: SingleImageAnalysisResponse, targetView?: AnatomicalOrientation) => void;
@@ -197,6 +201,7 @@ const initialViewState = (): ViewScanState => ({
 
 export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
   activeCase: null,
+  activeCaseId: null,
   caseId: null,
   activeImageTab: "original",
   orientation: "front",
@@ -225,6 +230,29 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
   analysisError: null,
 
   patientInfo: generateCleanPatientInfo(),
+
+  setActiveCaseId: (id: string | null) => {
+    set({ activeCaseId: id, caseId: id });
+    if (id) {
+      localStorage.setItem("orthinx_active_case_id", id);
+    } else {
+      localStorage.removeItem("orthinx_active_case_id");
+    }
+  },
+
+  hasActiveCase: () => {
+    const { activeCaseId, caseId, activeCase, views } = get();
+    const hasId = Boolean(activeCaseId || caseId || activeCase?.caseId);
+    const hasData = Boolean(
+      activeCase?.analysisResult ||
+      views?.front?.analysisResult ||
+      views?.side?.analysisResult ||
+      views?.top?.analysisResult ||
+      views?.front?.file ||
+      views?.front?.filePreviewUrl
+    );
+    return hasId && hasData;
+  },
 
   setPatientInfo: (info) =>
     set((state) => {
@@ -260,6 +288,7 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
 
     const objectUrl = URL.createObjectURL(file);
     const draftCaseId =
+      get().activeCaseId ||
       get().caseId ||
       `CASE-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
@@ -553,8 +582,9 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
         studyDate: res.formatted_date,
       };
 
+      const finalCaseId = res.case_id || get().activeCaseId || get().caseId || `case_${Date.now()}`;
       const newActiveCase: ActiveCase = {
-        caseId: res.case_id || get().caseId || `case_${Date.now()}`,
+        caseId: finalCaseId,
         patientId: updatedPatientInfo.patientId,
         patientName: updatedPatientInfo.patientName,
         age: updatedPatientInfo.patientAge,
@@ -581,7 +611,8 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
 
       set({
         activeCase: newActiveCase,
-        caseId: res.case_id || get().caseId,
+        activeCaseId: finalCaseId,
+        caseId: finalCaseId,
         calibrationMode: calibMode,
         views: allViews,
         patientInfo: updatedPatientInfo,
@@ -631,15 +662,31 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
     }
   },
 
+  clearActiveCase: () => {
+    get().resetActiveCase();
+  },
+
   resetActiveCase: () => {
-    const { views } = get();
+    const { views, activeCase } = get();
     Object.values(views).forEach((v) => {
       if (v.filePreviewUrl && v.filePreviewUrl.startsWith("blob:")) {
         try {
           URL.revokeObjectURL(v.filePreviewUrl);
         } catch (_) {}
       }
+      if (v.enhancedPreviewUrl && v.enhancedPreviewUrl.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(v.enhancedPreviewUrl);
+        } catch (_) {}
+      }
     });
+
+    if (activeCase?.originalImageUrl && activeCase.originalImageUrl.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(activeCase.originalImageUrl);
+      } catch (_) {}
+    }
+
 
     try {
       localStorage.removeItem("orthinx_active_case_id");
@@ -651,6 +698,7 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
 
     set({
       activeCase: null,
+      activeCaseId: null,
       caseId: null,
       activeImageTab: "original",
       orientation: "front",
@@ -765,8 +813,9 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
       studyDate: result.formatted_date,
     };
 
+    const finalCaseId = result.case_id || get().activeCaseId || get().caseId || `case_${Date.now()}`;
     const loadedCase: ActiveCase = {
-      caseId: result.case_id || get().caseId || `case_${Date.now()}`,
+      caseId: finalCaseId,
       patientId: updatedPInfo.patientId,
       patientName: updatedPInfo.patientName,
       age: updatedPInfo.patientAge,
@@ -802,7 +851,8 @@ export const useAnalysisStore = create<AnalysisStoreState>()((set, get) => ({
 
     set({
       activeCase: loadedCase,
-      caseId: result.case_id || get().caseId,
+      activeCaseId: finalCaseId,
+      caseId: finalCaseId,
       orientation: viewKey,
       views: updatedViews,
       patientInfo: updatedPInfo,

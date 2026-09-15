@@ -79,6 +79,7 @@ export interface PatientStore {
   createPatient: (patient: Omit<Patient, "id" | "createdAt" | "updatedAt">) => Promise<Patient>;
   updatePatient: (id: string, data: Partial<Patient>) => Promise<void>;
   deletePatient: (id: string) => Promise<void>;
+  clearAllPatients: () => Promise<void>;
 }
 
 const mapBackendPatient = (bp: BackendPatient): Patient => ({
@@ -191,6 +192,20 @@ export const usePatientStore = create<PatientStore>((set, get) => ({
     }
     set({
       patients: get().patients.filter((p) => p.id !== id),
+      loading: false,
+    });
+  },
+
+  clearAllPatients: async () => {
+    set({ loading: true, error: null });
+    try {
+      await patientApi.clearAll();
+    } catch (err: any) {
+      console.warn("Could not clear patients from backend:", err?.message);
+    }
+    set({
+      patients: [],
+      selectedPatient: null,
       loading: false,
     });
   },

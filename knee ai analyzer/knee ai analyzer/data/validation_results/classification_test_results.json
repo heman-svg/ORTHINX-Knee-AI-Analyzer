@@ -1,0 +1,90 @@
+{
+  "test_samples_count": 492,
+  "accuracy": 0.6768,
+  "balanced_accuracy": 0.6488,
+  "macro_precision": 0.6709,
+  "macro_recall": 0.6488,
+  "macro_f1": 0.6552,
+  "weighted_f1": 0.6744,
+  "per_class_metrics": {
+    "Normal": {
+      "class_id": 0,
+      "precision": 0.8309,
+      "recall": 0.7386,
+      "f1_score": 0.782,
+      "support": 153
+    },
+    "Doubtful": {
+      "class_id": 1,
+      "precision": 0.5761,
+      "recall": 0.7413,
+      "f1_score": 0.6483,
+      "support": 143
+    },
+    "Mild": {
+      "class_id": 2,
+      "precision": 0.44,
+      "recall": 0.3235,
+      "f1_score": 0.3729,
+      "support": 68
+    },
+    "Moderate": {
+      "class_id": 3,
+      "precision": 0.7333,
+      "recall": 0.6667,
+      "f1_score": 0.6984,
+      "support": 66
+    },
+    "Severe": {
+      "class_id": 4,
+      "precision": 0.7742,
+      "recall": 0.7742,
+      "f1_score": 0.7742,
+      "support": 62
+    }
+  },
+  "confusion_matrix": [
+    [
+      113,
+      36,
+      4,
+      0,
+      0
+    ],
+    [
+      15,
+      106,
+      18,
+      2,
+      2
+    ],
+    [
+      6,
+      30,
+      22,
+      8,
+      2
+    ],
+    [
+      2,
+      4,
+      6,
+      44,
+      10
+    ],
+    [
+      0,
+      8,
+      0,
+      6,
+      48
+    ]
+  ],
+  "class_names": [
+    "Normal",
+    "Doubtful",
+    "Mild",
+    "Moderate",
+    "Severe"
+  ]
+}

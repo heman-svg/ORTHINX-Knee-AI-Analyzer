@@ -144,13 +144,26 @@ export const patientApi = {
   update: (id: number | string, data: Partial<{ name: string; age: number; sex: string }>) =>
     api.put<BackendPatient>(`/patients/${id}`, data),
   delete: (id: number | string) => api.delete<{ message: string; patient_id: number }>(`/patients/${id}`),
+  clearAll: () => api.delete<{ message: string }>("/patients/all"),
 };
+
+export interface ClassificationResult {
+  class_id: number | null;
+  class_name: "Normal" | "Doubtful" | "Mild" | "Moderate" | "Severe" | string;
+  confidence: number;
+  probabilities: Record<string, number>;
+  model_version: string;
+  architecture?: string;
+  status?: string;
+  message?: string;
+}
 
 export interface SingleImageAnalysisResponse {
   success?: boolean;
   status: "success" | "failed" | "error";
   case_id?: string;
   image_id?: string;
+  classification?: ClassificationResult;
   image?: {
     original?: string;
     enhanced?: string;
@@ -348,6 +361,7 @@ export const scanApi = {
     document.body.removeChild(a);
   },
   listAllCases: () => api.get<any[]>("/scans/cases/all"),
+  clearAllCases: () => api.delete<{ message: string; deleted_cases: number }>("/scans/cases/all"),
   getCase: (caseId: string) => api.get<any>(`/scans/case/${encodeURIComponent(caseId)}`),
   getAnalysis: (caseId: string) => api.get<any>(`/scans/analysis/${encodeURIComponent(caseId)}`),
 };
